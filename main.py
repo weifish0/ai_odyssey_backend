@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import logging
 import random
+from openai import OpenAI
+import hashlib
+import aiofiles
+from fastapi.staticfiles import StaticFiles
 
 # 載入環境變數
 load_dotenv()
@@ -35,6 +39,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 設定靜態檔案服務
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # 安全設定
 security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -57,6 +64,17 @@ API_KEY = os.getenv("NCHC_API_KEY")
 
 if not API_KEY:
     logger.warning("NCHC_API_KEY 環境變數未設定")
+
+# OpenAI API 設定
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.warning("OPENAI_API_KEY 環境變數未設定")
+else:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# 確保 static/images 資料夾存在
+STATIC_IMAGES_DIR = "static/images"
+os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
 
 # Pydantic 模型 - 認證相關
 class UserRegister(BaseModel):
@@ -156,6 +174,64 @@ async def get_api_key():
             detail="API Key 未設定，請設定 NCHC_API_KEY 環境變數"
         )
     return API_KEY
+
+async def get_openai_client():
+    """取得 OpenAI 客戶端"""
+    if not OPENAI_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="OpenAI API Key 未設定，請設定 OPENAI_API_KEY 環境變數"
+        )
+    return openai_client
+
+def validate_prompt_safety(prompt: str) -> bool:
+    """驗證提示詞的安全性"""
+    # 定義可能觸發安全系統的詞彙
+    unsafe_words = [
+        "blood", "gore", "violence", "weapon", "drug", "alcohol", "nude", "naked",
+        "sexual", "explicit", "offensive", "hate", "discrimination", "political",
+        "controversial", "inappropriate", "unsafe", "dangerous", "harmful"
+    ]
+    
+    # 檢查是否包含不安全的詞彙
+    prompt_lower = prompt.lower()
+    for word in unsafe_words:
+        if word in prompt_lower:
+            return False
+    
+    return True
+
+async def download_and_save_image(image_url: str, prompt: str) -> str:
+    """下載圖片並保存到本地，返回本地檔案路徑"""
+    try:
+        # 生成隨機 hash 值
+        timestamp = str(datetime.now().timestamp())
+        random_salt = str(random.randint(1000, 9999))
+        hash_input = f"{prompt}{timestamp}{random_salt}"
+        file_hash = hashlib.md5(hash_input.encode()).hexdigest()[:12]
+        
+        # 檔案名稱
+        filename = f"{file_hash}.png"
+        filepath = os.path.join(STATIC_IMAGES_DIR, filename)
+        
+        # 下載圖片
+        async with httpx.AsyncClient() as client:
+            response = await client.get(image_url, timeout=30.0)
+            response.raise_for_status()
+            
+            # 保存圖片到本地
+            async with aiofiles.open(filepath, 'wb') as f:
+                await f.write(response.content)
+        
+        logger.info(f"圖片已保存到: {filepath}")
+        return filename
+        
+    except Exception as e:
+        logger.error(f"下載圖片失敗: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"下載圖片失敗: {str(e)}"
+        )
 
 # API 端點
 
@@ -393,10 +469,11 @@ async def identify_fish(username: str = Depends(verify_token)):
 
 # 3. 模組三：國王的厭食症 (Generative AI)
 
+# TODO: 需要驗證 token
+# username: str = Depends(verify_token),
 @app.post("/module3/generate-recipe-text")
 async def generate_recipe_text(
     request: GenerateRecipeTextRequest,
-    username: str = Depends(verify_token),
     api_key: str = Depends(get_api_key)
 ):
     """創造食譜描述"""
@@ -464,22 +541,83 @@ async def generate_recipe_text(
         logger.error(f"未預期錯誤: {e}")
         raise HTTPException(status_code=500, detail=f"未預期錯誤: {str(e)}")
 
+
+# TODO: 需要驗證 token
+# username: str = Depends(verify_token),
 @app.post("/module3/generate-recipe-image")
 async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
-    username: str = Depends(verify_token)
+    client: OpenAI = Depends(get_openai_client)
 ):
     """視覺化菜色"""
-    # 模擬圖片生成 (實際應用中會調用圖片生成 API)
-    image_id = str(uuid.uuid4())
-    image_url = f"https://cdn.your-game.com/generated-dishes/{image_id}.png"
-    
-    return {
-        "status": "success",
-        "data": {
-            "image_url": image_url
+    try:
+        # 驗證提示詞安全性
+        if not validate_prompt_safety(request.prompt):
+            raise HTTPException(
+                status_code=400,
+                detail="提示詞包含不安全的內容，請使用更適當的描述。建議：專注於食物的正面描述，如食材、烹飪方式、菜色外觀等。"
+            )
+        
+        # 優化提示詞，增加安全性和具體性
+        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image, safe for all audiences, no inappropriate content."
+        
+        # 使用 DALL-E 生成圖片
+        response = client.images.generate(
+            model="dall-e-2",
+            prompt=enhanced_prompt,
+            n=1,
+            size="1024x1024"
+        )
+        
+        # 直接取得圖片 URL
+        if response.data and len(response.data) > 0:
+            image_url = response.data[0].url
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="圖片生成失敗"
+            )
+        
+        # 下載並保存圖片到本地
+        filename = await download_and_save_image(image_url, request.prompt)
+        
+        # 返回本地圖片 URL
+        local_image_url = f"/static/images/{filename}"
+        
+        return {
+            "status": "success",
+            "data": {
+                "image_url": local_image_url,
+                "original_url": image_url,
+                "filename": filename
+            }
         }
-    }
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"圖片生成錯誤: {error_msg}")
+        
+        # 處理特定的 OpenAI 錯誤
+        if "content_policy_violation" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="提示詞內容違反安全政策，請使用更適當的描述。建議：描述具體的食材、烹飪方式、菜色外觀等。"
+            )
+        elif "safety_system" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="提示詞被安全系統拒絕，請避免使用可能不當的詞彙。建議：專注於食物的正面描述。"
+            )
+        elif "400" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="請求格式錯誤，請檢查提示詞內容。建議：使用清晰、具體的食物描述。"
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"圖片生成錯誤: {error_msg}"
+            )
 
 # 保留原有的 NCHC API 端點 (向後相容)
 @app.post("/chat/completions")

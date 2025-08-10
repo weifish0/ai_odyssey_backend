@@ -6,3 +6,5 @@ pydantic
 requests
 PyJWT
 bcrypt
+openai
+aiofiles
