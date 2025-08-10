@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
@@ -184,22 +184,6 @@ async def get_openai_client():
         )
     return openai_client
 
-def validate_prompt_safety(prompt: str) -> bool:
-    """驗證提示詞的安全性"""
-    # 定義可能觸發安全系統的詞彙
-    unsafe_words = [
-        "blood", "gore", "violence", "weapon", "drug", "alcohol", "nude", "naked",
-        "sexual", "explicit", "offensive", "hate", "discrimination", "political",
-        "controversial", "inappropriate", "unsafe", "dangerous", "harmful"
-    ]
-    
-    # 檢查是否包含不安全的詞彙
-    prompt_lower = prompt.lower()
-    for word in unsafe_words:
-        if word in prompt_lower:
-            return False
-    
-    return True
 
 async def download_and_save_image(image_url: str, prompt: str) -> str:
     """下載圖片並保存到本地，返回本地檔案路徑"""
@@ -547,23 +531,17 @@ async def generate_recipe_text(
 @app.post("/module3/generate-recipe-image")
 async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
+    http_request: Request,
     client: OpenAI = Depends(get_openai_client)
 ):
     """視覺化菜色"""
     try:
-        # 驗證提示詞安全性
-        if not validate_prompt_safety(request.prompt):
-            raise HTTPException(
-                status_code=400,
-                detail="提示詞包含不安全的內容，請使用更適當的描述。建議：專注於食物的正面描述，如食材、烹飪方式、菜色外觀等。"
-            )
-        
         # 優化提示詞，增加安全性和具體性
         enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image, safe for all audiences, no inappropriate content."
         
         # 使用 DALL-E 生成圖片
         response = client.images.generate(
-            model="dall-e-2",
+            model="dall-e-3",
             prompt=enhanced_prompt,
             n=1,
             size="1024x1024"
@@ -582,13 +560,13 @@ async def generate_recipe_image(
         filename = await download_and_save_image(image_url, request.prompt)
         
         # 返回本地圖片 URL
-        local_image_url = f"/static/images/{filename}"
+        base_url = str(http_request.base_url).rstrip('/')
+        local_image_url = f"{base_url}/static/images/{filename}"
         
         return {
             "status": "success",
             "data": {
                 "image_url": local_image_url,
-                "original_url": image_url,
                 "filename": filename
             }
         }
