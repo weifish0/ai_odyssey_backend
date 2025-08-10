@@ -39,9 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 設定靜態檔案服務
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 # 安全設定
 security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -75,6 +72,9 @@ else:
 # 確保 static/images 資料夾存在
 STATIC_IMAGES_DIR = "static/images"
 os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
+
+# 設定靜態檔案服務 (在資料夾創建之後)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Pydantic 模型 - 認證相關
 class UserRegister(BaseModel):
