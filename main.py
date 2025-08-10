@@ -315,8 +315,7 @@ async def get_current_user(username: str = Depends(verify_token)):
 
 # 2. 模組二：魚池的財富密碼 (Image Recognition)
 
-@app.post("/module2/ask-pet")
-
+@app.post("/ask-pet")
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
 async def ask_pet(
@@ -460,7 +459,7 @@ async def generate_recipe_text(
     request: GenerateRecipeTextRequest,
     api_key: str = Depends(get_api_key)
 ):
-    """創造食譜描述"""
+    """根據玩家輸入的提示詞 (Prompt)，生成菜色的文字描述。"""
     try:
         # 建立訊息列表
         messages = [
@@ -534,7 +533,7 @@ async def generate_recipe_image(
     http_request: Request,
     client: OpenAI = Depends(get_openai_client)
 ):
-    """視覺化菜色"""
+    """將食譜文字描述傳給後端，生成對應的菜色圖片。"""
     try:
         # 優化提示詞，增加安全性和具體性
         enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image, safe for all audiences, no inappropriate content."
@@ -563,11 +562,25 @@ async def generate_recipe_image(
         base_url = str(http_request.base_url).rstrip('/')
         local_image_url = f"{base_url}/static/images/{filename}"
         
+        # 記錄生成時間
+        generation_time = datetime.now()
+        
         return {
             "status": "success",
             "data": {
                 "image_url": local_image_url,
-                "filename": filename
+                "prompt": request.prompt,
+                "enhanced_prompt": enhanced_prompt,
+                "model_used": "dall-e-3",
+                "image_size": "1024x1024",
+                "generation_time": generation_time.isoformat(),
+                "generation_date": generation_time.strftime("%Y-%m-%d"),
+                "generation_timestamp": generation_time.timestamp(),
+                "file_info": {
+                    "original_filename": filename,
+                    "file_path": f"static/images/{filename}",
+                    "full_url": local_image_url
+                }
             }
         }
         
