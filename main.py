@@ -76,7 +76,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY 環境變數未設定")
 else:
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # 載入 system prompts
 def load_system_prompts():
@@ -173,14 +173,16 @@ class GenerateRecipeImageResponse(BaseModel):
         "full_url": "https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png"
     })
 
-# Pydantic 模型 - Gemini 測試相關
-class GeminiTestRequest(BaseModel):
-    prompt: str = Field(..., description="測試提示詞", example="Explain how AI works in a few words")
+# Pydantic 模型 - 食物圖片分析相關
+class FoodImageAnalysisRequest(BaseModel):
+    image_hash: str = Field(..., description="圖片6位數hash", example="abc123")
+    prompt: Optional[str] = Field(default="請分析這張食物圖片，給出詳細的評語，包括：1. 食物名稱和類型 2. 外觀描述顏色與味道評估 3. 營養價值評估 4. 整體評價", description="分析提示詞，如果不填寫將使用預設的食物分析提示詞")
 
-class GeminiTestResponse(BaseModel):
-    response: str = Field(..., description="Gemini 回應內容")
+class FoodImageAnalysisResponse(BaseModel):
+    analysis: str = Field(..., description="Gemini 對食物的評語")
     model_used: str = Field(..., description="使用的模型")
-    prompt: str = Field(..., description="輸入的提示詞")
+    image_hash: str = Field(..., description="分析的圖片hash")
+    prompt: str = Field(..., description="使用的提示詞")
 
 # 通用回應格式
 class SuccessResponse(BaseModel):
@@ -237,15 +239,6 @@ async def get_openai_client():
             detail="OpenAI API Key 未設定，請設定 OPENAI_API_KEY 環境變數"
         )
     return openai_client
-
-async def get_gemini_client():
-    """取得 Gemini 客戶端"""
-    if not GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Gemini API Key 未設定，請設定 GEMINI_API_KEY 環境變數"
-        )
-    return genai
 
 
 async def download_and_save_image(image_url: str, prompt: str) -> str:
@@ -643,25 +636,50 @@ async def generate_recipe_image(
                 detail=f"圖片生成錯誤: {error_msg}"
             )
 
-@app.post("/test-gemini", response_model=GeminiTestResponse)
-async def test_gemini(
-    request: GeminiTestRequest,
-    client: genai = Depends(get_gemini_client)
+@app.post("/module3/analyze-food-image", response_model=FoodImageAnalysisResponse)
+async def analyze_food_image(
+    request: FoodImageAnalysisRequest,
 ):
-    """測試 Google Gemini API 串接"""
+    """使用 Gemini 分析食物圖片並給出評語"""
     try:
-        # 使用 Gemini 生成內容
+        # 檢查圖片是否存在
+        image_path = os.path.join(STATIC_IMAGES_DIR, f"{request.image_hash}.png")
+        if not os.path.exists(image_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"找不到圖片: {request.image_hash}.png"
+            )
+        
+        # 讀取圖片文件
+        with open(image_path, 'rb') as f:
+            image_bytes = f.read()
+        
+        # 使用 Gemini 分析圖片
+        from google.genai import types
+        
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=request.prompt
+            contents=[
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type='image/png',
+                ),
+                request.prompt
+            ]
         )
         
-        return GeminiTestResponse(
-            response=response.text,
+        return FoodImageAnalysisResponse(
+            analysis=response.text,
             model_used="gemini-2.5-flash",
+            image_hash=request.image_hash,
             prompt=request.prompt
         )
         
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"圖片文件不存在: {request.image_hash}.png"
+        )
     except Exception as e:
         logger.error(f"Gemini API 錯誤: {e}")
         raise HTTPException(
