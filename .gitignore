@@ -52,3 +52,6 @@ Thumbs.db
 # 暫存檔案
 *.tmp
 *.temp 
+
+static/*
+!static/.gitkeep

@@ -8,3 +8,4 @@ PyJWT
 bcrypt
 openai
 aiofiles
+google-genai

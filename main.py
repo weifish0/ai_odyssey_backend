@@ -16,6 +16,8 @@ from openai import OpenAI
 import hashlib
 import aiofiles
 from fastapi.staticfiles import StaticFiles
+import json
+from google import genai
 
 # 載入環境變數
 load_dotenv()
@@ -69,6 +71,30 @@ if not OPENAI_API_KEY:
 else:
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Google Gemini API 設定
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY 環境變數未設定")
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# 載入 system prompts
+def load_system_prompts():
+    """載入 system prompts 從 JSON 檔案"""
+    try:
+        with open("system_prompts.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("prompts", [])
+    except FileNotFoundError:
+        logger.warning("system_prompts.json 檔案未找到，使用預設 prompt")
+        return []
+    except json.JSONDecodeError:
+        logger.error("system_prompts.json 檔案格式錯誤")
+        return []
+
+# 載入 prompts
+system_prompts = load_system_prompts()
+
 # 確保 static/images 資料夾存在
 STATIC_IMAGES_DIR = "static/images"
 os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
@@ -86,47 +112,75 @@ class UserLogin(BaseModel):
     password: str = Field(..., description="密碼")
 
 class User(BaseModel):
-    id: str
-    username: str
-    money: int = 500
+    id: str = Field(..., example="550e8400-e29b-41d4-a716-446655440000")
+    username: str = Field(..., example="探險家小明")
+    money: int = Field(500, example=500, description="遊戲金幣")
 
-# Pydantic 模型 - 模組二：魚池的財富密碼
-class AskPetRequest(BaseModel):
-    question: str = Field(..., description="向 AI 寵物提問")
+# Pydantic 模型 - LLM 對話相關
+class LLMChatRequest(BaseModel):
+    question: str = Field(..., 
+                          example="什麼是影像辨識")
+    system_prompt: str = Field(default=system_prompts[0]["content"] if system_prompts else "請輸入系統提示詞", 
+                              description="系統提示詞，如果不填寫將使用預設的智識庫設定")
 
-class AskPetResponse(BaseModel):
-    answer: str
+class LLMChatResponse(BaseModel):
+    answer: str = Field(..., example="嘿，探險家！影像辨識就像是讓電腦學會『看』東西的超能力！就像你教小朋友認識動物一樣，我們教電腦認識圖片中的內容。想像一下，如果電腦能認出照片裡是一隻貓、一朵花，或者一個蘋果，那不是很酷嗎？🤖✨")
 
 class ImageLabel(BaseModel):
-    image_id: str = Field(..., description="圖片 ID")
-    classification: str = Field(..., description="分類結果")
+    image_id: str = Field(..., example="img_fish_001", description="圖片 ID")
+    classification: str = Field(..., example="arowana", description="分類結果")
 
 class SubmitLabelsRequest(BaseModel):
-    labels: List[ImageLabel] = Field(..., description="標註結果列表")
+    labels: List[ImageLabel] = Field(..., example=[
+        {"image_id": "img_fish_001", "classification": "arowana"},
+        {"image_id": "img_fish_002", "classification": "tilapia"},
+        {"image_id": "img_fish_003", "classification": "arowana"}
+    ], description="標註結果列表")
 
 class SubmitLabelsResponse(BaseModel):
-    message: str
-    accuracy: float
+    message: str = Field(..., example="魔法魚鉤學習完成！它現在能更好地分辨魚了！")
+    accuracy: float = Field(..., example=0.95, description="訓練準確率，範圍 0.8-0.98")
 
 class IdentifyFishResponse(BaseModel):
-    fish_type: str
-    image_url: str
-    decision: str
-    value_gained: int
-    message: str
+    fish_type: str = Field(..., example="arowana", description="魚類類型：arowana(銀龍魚) 或 tilapia(吳郭魚)")
+    image_url: str = Field(..., example="https://cdn.your-game.com/fishes/arowana_1.png")
+    decision: str = Field(..., example="keep", description="決定：keep(保留) 或 release(放生)")
+    value_gained: int = Field(..., example=1000, description="獲得的價值")
+    message: str = Field(..., example="是銀龍魚！AI 魔法魚鉤決定留下牠！")
 
 # Pydantic 模型 - 模組三：國王的厭食症
 class GenerateRecipeTextRequest(BaseModel):
     prompt: str = Field(..., description="食譜生成提示詞")
 
 class GenerateRecipeTextResponse(BaseModel):
-    recipe_text: str
+    recipe_text: str = Field(..., example="✨ 魔法森林的彩虹水果沙拉 ✨\n\n這道菜就像森林精靈的魔法盛宴！我們需要：\n\n🍎 紅蘋果 - 切成小星星形狀\n🍊 橘子 - 剝成小月牙\n🍇 葡萄 - 像珍珠一樣閃亮\n🥝 奇異果 - 切成小圓片\n\n調味魔法：\n🍯 蜂蜜 - 森林的甜蜜精華\n🍋 檸檬汁 - 清新的魔法\n🌿 薄荷葉 - 森林的香氣\n\n做法：\n1. 將所有水果洗淨，切成可愛的形狀\n2. 輕輕混合，不要破壞水果的完整性\n3. 淋上蜂蜜和檸檬汁的魔法組合\n4. 最後點綴新鮮的薄荷葉\n\n這道沙拉不僅美味，還能讓國王想起森林的快樂時光！🌈")
 
 class GenerateRecipeImageRequest(BaseModel):
     prompt: str = Field(..., description="圖片生成提示詞")
 
 class GenerateRecipeImageResponse(BaseModel):
-    image_url: str
+    image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
+    prompt: str = Field(..., example="大便")
+    enhanced_prompt: str = Field(..., example="Beautiful, appetizing food photography: 大便. High quality, professional food image, safe for all audiences, no inappropriate content.")
+    model_used: str = Field(..., example="dall-e-3")
+    image_size: str = Field(..., example="1024x1024")
+    generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
+    generation_date: str = Field(..., example="2024-01-15")
+    generation_timestamp: float = Field(..., example=1705311045.123456)
+    file_info: Dict[str, Any] = Field(..., example={
+        "original_filename": "d1b094d315f4.png",
+        "file_path": "static/images/d1b094d315f4.png",
+        "full_url": "https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png"
+    })
+
+# Pydantic 模型 - Gemini 測試相關
+class GeminiTestRequest(BaseModel):
+    prompt: str = Field(..., description="測試提示詞", example="Explain how AI works in a few words")
+
+class GeminiTestResponse(BaseModel):
+    response: str = Field(..., description="Gemini 回應內容")
+    model_used: str = Field(..., description="使用的模型")
+    prompt: str = Field(..., description="輸入的提示詞")
 
 # 通用回應格式
 class SuccessResponse(BaseModel):
@@ -183,6 +237,15 @@ async def get_openai_client():
             detail="OpenAI API Key 未設定，請設定 OPENAI_API_KEY 環境變數"
         )
     return openai_client
+
+async def get_gemini_client():
+    """取得 Gemini 客戶端"""
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Gemini API Key 未設定，請設定 GEMINI_API_KEY 環境變數"
+        )
+    return genai
 
 
 async def download_and_save_image(image_url: str, prompt: str) -> str:
@@ -298,37 +361,32 @@ async def login(user_data: UserLogin):
         }
     }
 
-@app.get("/users/me")
+@app.get("/users/me", response_model=SuccessResponse)
 async def get_current_user(username: str = Depends(verify_token)):
     """獲取當前使用者資訊"""
     user = users_db[username]
-    return {
-        "status": "success",
-        "data": {
-            "user": {
-                "id": user["id"],
-                "username": user["username"],
-                "money": user["money"]
-            }
+    return SuccessResponse(data={
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "money": user["money"]
         }
-    }
+    })
 
-# 2. 模組二：魚池的財富密碼 (Image Recognition)
-
-@app.post("/ask-pet")
+@app.post("/llama4", response_model=LLMChatResponse)
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
-async def ask_pet(
-    request: AskPetRequest,      
+async def chat_with_llm(
+    request: LLMChatRequest,      
     api_key: str = Depends(get_api_key)
 ):
-    """詢問 AI 寵物"""
+    """與 LLM 進行對話，使用llama4模型，temp 0.4，max_tokens 1000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
     try:
         # 建立訊息列表
         messages = [
             {
                 "role": "system",
-                "content": "你是一個專門研究魚類的 AI 助手。請用中文繁體回答關於魚類特徵的問題，回答要詳細且準確。"
+                "content": request.system_prompt
             },
             {
                 "role": "user",
@@ -340,7 +398,7 @@ async def ask_pet(
         chat_request = {
             "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
             "messages": messages,
-            "temperature": 0.7,
+            "temperature": 0.4,
             "max_tokens": 1000
         }
         
@@ -370,12 +428,7 @@ async def ask_pet(
             else:
                 answer = "抱歉，我無法回答這個問題。"
             
-            return {
-                "status": "success",
-                "data": {
-                    "answer": answer
-                }
-            }
+            return LLMChatResponse(answer=answer)
             
     except httpx.TimeoutException:
         logger.error("請求超時")
@@ -387,21 +440,18 @@ async def ask_pet(
         logger.error(f"未預期錯誤: {e}")
         raise HTTPException(status_code=500, detail=f"未預期錯誤: {str(e)}")
 
-@app.get("/module2/training-images")
+@app.get("/module2/training-images", response_model=SuccessResponse)
 async def get_training_images(username: str = Depends(verify_token)):
     """獲取待分類的魚類圖片"""
     # 隨機選擇 3-5 張圖片
     num_images = random.randint(3, 5)
     selected_images = random.sample(fish_images_db, min(num_images, len(fish_images_db)))
     
-    return {
-        "status": "success",
-        "data": {
-            "images": selected_images
-        }
-    }
+    return SuccessResponse(data={
+        "images": selected_images
+    })
 
-@app.post("/module2/submit-labels")
+@app.post("/module2/submit-labels", response_model=SubmitLabelsResponse)
 async def submit_labels(
     request: SubmitLabelsRequest,
     username: str = Depends(verify_token)
@@ -410,15 +460,12 @@ async def submit_labels(
     # 模擬訓練準確率 (80-98%)
     accuracy = random.uniform(0.8, 0.98)
     
-    return {
-        "status": "success",
-        "data": {
-            "message": "魔法魚鉤學習完成！它現在能更好地分辨魚了！",
-            "accuracy": round(accuracy, 2)
-        }
-    }
+    return SubmitLabelsResponse(
+        message="魔法魚鉤學習完成！它現在能更好地分辨魚了！",
+        accuracy=round(accuracy, 2)
+    )
 
-@app.post("/module2/identify-fish")
+@app.post("/module2/identify-fish", response_model=IdentifyFishResponse)
 async def identify_fish(username: str = Depends(verify_token)):
     """進行 AI 辨識"""
     # 隨機決定釣到的魚類
@@ -427,34 +474,28 @@ async def identify_fish(username: str = Depends(verify_token)):
     
     if fish_type == "arowana":
         # 銀龍魚 - 保留
-        return {
-            "status": "success",
-            "data": {
-                "fish_type": "arowana",
-                "image_url": "https://cdn.your-game.com/fishes/arowana_1.png",
-                "decision": "keep",
-                "value_gained": 1000,
-                "message": "是銀龍魚！AI 魔法魚鉤決定留下牠！"
-            }
-        }
+        return IdentifyFishResponse(
+            fish_type="arowana",
+            image_url="https://cdn.your-game.com/fishes/arowana_1.png",
+            decision="keep",
+            value_gained=1000,
+            message="是銀龍魚！AI 魔法魚鉤決定留下牠！"
+        )
     else:
         # 吳郭魚 - 放生
-        return {
-            "status": "success",
-            "data": {
-                "fish_type": "tilapia",
-                "image_url": "https://cdn.your-game.com/fishes/tilapia_1.png",
-                "decision": "release",
-                "value_gained": 0,
-                "message": "是吳郭魚！AI 魔法魚鉤將牠放回去了。"
-            }
-        }
+        return IdentifyFishResponse(
+            fish_type="tilapia",
+            image_url="https://cdn.your-game.com/fishes/tilapia_1.png",
+            decision="release",
+            value_gained=0,
+            message="是吳郭魚！AI 魔法魚鉤將牠放回去了。"
+        )
 
 # 3. 模組三：國王的厭食症 (Generative AI)
 
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
-@app.post("/module3/generate-recipe-text")
+@app.post("/module3/generate-recipe-text", response_model=GenerateRecipeTextResponse)
 async def generate_recipe_text(
     request: GenerateRecipeTextRequest,
     api_key: str = Depends(get_api_key)
@@ -465,7 +506,7 @@ async def generate_recipe_text(
         messages = [
             {
                 "role": "system",
-                "content": "你是一個專業的廚師和美食作家。請根據使用者的要求，創造出富有創意和想像力的食譜描述。描述要生動有趣，符合童話故事的風格。請使用中文繁體回答。"
+                "content": "你是一個專業的廚師和美食作家。請根據使用者的要求，創造出富有創意和想像力的食譜描述。描述要生動有趣，符合童話故事的風格。"
             },
             {
                 "role": "user",
@@ -507,12 +548,7 @@ async def generate_recipe_text(
             else:
                 recipe_text = "抱歉，我無法生成食譜描述。"
             
-            return {
-                "status": "success",
-                "data": {
-                    "recipe_text": recipe_text
-                }
-            }
+            return GenerateRecipeTextResponse(recipe_text=recipe_text)
             
     except httpx.TimeoutException:
         logger.error("請求超時")
@@ -527,7 +563,7 @@ async def generate_recipe_text(
 
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
-@app.post("/module3/generate-recipe-image")
+@app.post("/module3/generate-recipe-image", response_model=GenerateRecipeImageResponse)
 async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
     http_request: Request,
@@ -536,7 +572,7 @@ async def generate_recipe_image(
     """將食譜文字描述傳給後端，生成對應的菜色圖片。"""
     try:
         # 優化提示詞，增加安全性和具體性
-        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image, safe for all audiences, no inappropriate content."
+        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image."
         
         # 使用 DALL-E 生成圖片
         response = client.images.generate(
@@ -565,24 +601,21 @@ async def generate_recipe_image(
         # 記錄生成時間
         generation_time = datetime.now()
         
-        return {
-            "status": "success",
-            "data": {
-                "image_url": local_image_url,
-                "prompt": request.prompt,
-                "enhanced_prompt": enhanced_prompt,
-                "model_used": "dall-e-3",
-                "image_size": "1024x1024",
-                "generation_time": generation_time.isoformat(),
-                "generation_date": generation_time.strftime("%Y-%m-%d"),
-                "generation_timestamp": generation_time.timestamp(),
-                "file_info": {
-                    "original_filename": filename,
-                    "file_path": f"static/images/{filename}",
-                    "full_url": local_image_url
-                }
+        return GenerateRecipeImageResponse(
+            image_url=local_image_url,
+            prompt=request.prompt,
+            enhanced_prompt=enhanced_prompt,
+            model_used="dall-e-3",
+            image_size="1024x1024",
+            generation_time=generation_time.isoformat(),
+            generation_date=generation_time.strftime("%Y-%m-%d"),
+            generation_timestamp=generation_time.timestamp(),
+            file_info={
+                "original_filename": filename,
+                "file_path": f"static/images/{filename}",
+                "full_url": local_image_url
             }
-        }
+        )
         
     except Exception as e:
         error_msg = str(e)
@@ -610,43 +643,41 @@ async def generate_recipe_image(
                 detail=f"圖片生成錯誤: {error_msg}"
             )
 
-# 保留原有的 NCHC API 端點 (向後相容)
-@app.post("/chat/completions")
-async def chat_completions(
-    request: Dict[str, Any],
-    api_key: str = Depends(get_api_key)
+@app.post("/test-gemini", response_model=GeminiTestResponse)
+async def test_gemini(
+    request: GeminiTestRequest,
+    client: genai = Depends(get_gemini_client)
 ):
-    """完整的 Chat Completions API 端點 - 向後相容"""
+    """測試 Google Gemini API 串接"""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{NCHC_API_BASE_URL}/chat/completions",
-                headers={
-                    "x-api-key": api_key,
-                    "Content-Type": "application/json"
-                },
-                json=request,
-                timeout=60.0
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"NCHC API 錯誤: {response.status_code} - {response.text}")
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"NCHC API 錯誤: {response.text}"
-                )
-            
-            return response.json()
-            
-    except httpx.TimeoutException:
-        logger.error("請求超時")
-        raise HTTPException(status_code=408, detail="請求超時")
-    except httpx.RequestError as e:
-        logger.error(f"請求錯誤: {e}")
-        raise HTTPException(status_code=500, detail=f"請求錯誤: {str(e)}")
+        # 使用 Gemini 生成內容
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=request.prompt
+        )
+        
+        return GeminiTestResponse(
+            response=response.text,
+            model_used="gemini-2.5-flash",
+            prompt=request.prompt
+        )
+        
     except Exception as e:
-        logger.error(f"未預期錯誤: {e}")
-        raise HTTPException(status_code=500, detail=f"未預期錯誤: {str(e)}")
+        logger.error(f"Gemini API 錯誤: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gemini API 錯誤: {str(e)}"
+        )
+
+@app.get("/system-prompts")
+async def get_system_prompts():
+    """取得可用的 system prompts 列表"""
+    return {
+        "status": "success",
+        "data": {
+            "prompts": system_prompts
+        }
+    }
 
 @app.get("/models")
 async def list_models():
