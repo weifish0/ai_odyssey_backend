@@ -183,7 +183,7 @@ class FoodImageAnalysisResponse(BaseModel):
     analysis: str = Field(..., description="Gemini 對食物的詳細評語")
     score: int = Field(..., description="食物評分 (0-100分)", ge=0 , le=100)
     model_used: str = Field(..., description="使用的模型")
-    image_hash: str = Field(..., description="分析的圖片hash")
+    image_path: str = Field(..., description="分析的圖片路徑")
     prompt: str = Field(..., description="使用的提示詞")
     dish_expect: str = Field(..., description="顧客對這道菜的期待描述")
 
