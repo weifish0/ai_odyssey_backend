@@ -437,58 +437,7 @@ async def chat_with_llm(
         logger.error(f"未預期錯誤: {e}")
         raise HTTPException(status_code=500, detail=f"未預期錯誤: {str(e)}")
 
-@app.get("/module2/training-images", response_model=SuccessResponse)
-async def get_training_images(username: str = Depends(verify_token)):
-    """獲取待分類的魚類圖片"""
-    # 隨機選擇 3-5 張圖片
-    num_images = random.randint(3, 5)
-    selected_images = random.sample(fish_images_db, min(num_images, len(fish_images_db)))
-    
-    return SuccessResponse(data={
-        "images": selected_images
-    })
-
-@app.post("/module2/submit-labels", response_model=SubmitLabelsResponse)
-async def submit_labels(
-    request: SubmitLabelsRequest,
-    username: str = Depends(verify_token)
-):
-    """提交標註結果"""
-    # 模擬訓練準確率 (80-98%)
-    accuracy = random.uniform(0.8, 0.98)
-    
-    return SubmitLabelsResponse(
-        message="魔法魚鉤學習完成！它現在能更好地分辨魚了！",
-        accuracy=round(accuracy, 2)
-    )
-
-@app.post("/module2/identify-fish", response_model=IdentifyFishResponse)
-async def identify_fish(username: str = Depends(verify_token)):
-    """進行 AI 辨識"""
-    # 隨機決定釣到的魚類
-    fish_types = ["arowana", "tilapia"]
-    fish_type = random.choice(fish_types)
-    
-    if fish_type == "arowana":
-        # 銀龍魚 - 保留
-        return IdentifyFishResponse(
-            fish_type="arowana",
-            image_url="https://cdn.your-game.com/fishes/arowana_1.png",
-            decision="keep",
-            value_gained=1000,
-            message="是銀龍魚！AI 魔法魚鉤決定留下牠！"
-        )
-    else:
-        # 吳郭魚 - 放生
-        return IdentifyFishResponse(
-            fish_type="tilapia",
-            image_url="https://cdn.your-game.com/fishes/tilapia_1.png",
-            decision="release",
-            value_gained=0,
-            message="是吳郭魚！AI 魔法魚鉤將牠放回去了。"
-        )
-
-# 3. 模組三：國王的厭食症 (Generative AI)
+# 3. 模組一：國王的厭食症 (Generative AI)
 
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
@@ -647,11 +596,11 @@ async def analyze_food_image(
     """使用 Gemini 分析食物圖片並給出評語"""
     try:
         # 檢查圖片是否存在
-        image_path = os.path.join(STATIC_IMAGES_DIR, f"{request.image_hash}.png")
+        image_path = os.path.join(STATIC_IMAGES_DIR, f"{request.image_hash}")
         if not os.path.exists(image_path):
             raise HTTPException(
                 status_code=404,
-                detail=f"找不到圖片: {request.image_hash}.png"
+                detail=f"找不到圖片: {image_path}"
             )
         
         # 讀取圖片文件
@@ -669,7 +618,7 @@ async def analyze_food_image(
 請按照以下固定格式回覆：
 
 SCORE: [0-100分]
-(評分標準：0-30分=不合格，31-50分=需要改進，51-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
+(評分標準：0-29分=不合格，30-59分=需要改進，60-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
 
 ANALYSIS:
 [請以嚴格廚師的角度，詳細評語包括：
@@ -738,7 +687,7 @@ ANALYSIS:
             analysis=analysis,
             score=score,
             model_used="gemini-2.5-flash",
-            image_hash=request.image_hash,
+            image_path=image_path,
             prompt=chef_prompt,
             dish_expect=request.dish_expect
         )
@@ -746,15 +695,67 @@ ANALYSIS:
     except FileNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail=f"圖片文件不存在: {request.image_hash}.png"
+            detail=f"圖片文件不存在: {image_path}"
         )
     except Exception as e:
-        logger.error(f"Gemini API 錯誤: {e}")
+        logger.error(f"圖片分析錯誤: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Gemini API 錯誤: {str(e)}"
+            detail=f"圖片分析錯誤: {str(e)}"
         )
 
+# 2. 模組二：魔法魚鉤 (Generative AI)
+@app.get("/module2/training-images", response_model=SuccessResponse)
+async def get_training_images(username: str = Depends(verify_token)):
+    """獲取待分類的魚類圖片"""
+    # 隨機選擇 3-5 張圖片
+    num_images = random.randint(3, 5)
+    selected_images = random.sample(fish_images_db, min(num_images, len(fish_images_db)))
+    
+    return SuccessResponse(data={
+        "images": selected_images
+    })
+
+@app.post("/module2/submit-labels", response_model=SubmitLabelsResponse)
+async def submit_labels(
+    request: SubmitLabelsRequest,
+    username: str = Depends(verify_token)
+):
+    """提交標註結果"""
+    # 模擬訓練準確率 (80-98%)
+    accuracy = random.uniform(0.8, 0.98)
+    
+    return SubmitLabelsResponse(
+        message="魔法魚鉤學習完成！它現在能更好地分辨魚了！",
+        accuracy=round(accuracy, 2)
+    )
+
+@app.post("/module2/identify-fish", response_model=IdentifyFishResponse)
+async def identify_fish(username: str = Depends(verify_token)):
+    """進行 AI 辨識"""
+    # 隨機決定釣到的魚類
+    fish_types = ["arowana", "tilapia"]
+    fish_type = random.choice(fish_types)
+    
+    if fish_type == "arowana":
+        # 銀龍魚 - 保留
+        return IdentifyFishResponse(
+            fish_type="arowana",
+            image_url="https://cdn.your-game.com/fishes/arowana_1.png",
+            decision="keep",
+            value_gained=1000,
+            message="是銀龍魚！AI 魔法魚鉤決定留下牠！"
+        )
+    else:
+        # 吳郭魚 - 放生
+        return IdentifyFishResponse(
+            fish_type="tilapia",
+            image_url="https://cdn.your-game.com/fishes/tilapia_1.png",
+            decision="release",
+            value_gained=0,
+            message="是吳郭魚！AI 魔法魚鉤將牠放回去了。"
+        )     
+        
 
 @app.get("/system-prompts")
 async def get_system_prompts():
