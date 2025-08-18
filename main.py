@@ -175,14 +175,17 @@ class GenerateRecipeImageResponse(BaseModel):
 
 # Pydantic 模型 - 食物圖片分析相關
 class FoodImageAnalysisRequest(BaseModel):
-    image_hash: str = Field(..., description="圖片6位數hash", example="abc123")
-    prompt: Optional[str] = Field(default="請分析這張食物圖片，給出詳細的評語，包括：1. 食物名稱和類型 2. 外觀描述顏色與味道評估 3. 營養價值評估 4. 整體評價", description="分析提示詞，如果不填寫將使用預設的食物分析提示詞")
+    image_hash: str = Field(..., description="圖片12位數hash", example="a0f7cfb81fbf")
+    dish_expect: Optional[str] = Field(default="我期待這是一道色香味俱全、營養均衡、擺盤精美的美食", description="對這道菜的期待描述，如果不填寫將使用預設期待")
+    
 
 class FoodImageAnalysisResponse(BaseModel):
-    analysis: str = Field(..., description="Gemini 對食物的評語")
+    analysis: str = Field(..., description="Gemini 對食物的詳細評語")
+    score: int = Field(..., description="食物評分 (0-100分)", ge=0 , le=100)
     model_used: str = Field(..., description="使用的模型")
     image_hash: str = Field(..., description="分析的圖片hash")
     prompt: str = Field(..., description="使用的提示詞")
+    dish_expect: str = Field(..., description="顧客對這道菜的期待描述")
 
 
 # 通用回應格式
@@ -489,7 +492,7 @@ async def identify_fish(username: str = Depends(verify_token)):
 
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
-@app.post("/module3/generate-recipe-text", response_model=GenerateRecipeTextResponse)
+@app.post("/module1/generate-recipe-text", response_model=GenerateRecipeTextResponse)
 async def generate_recipe_text(
     request: GenerateRecipeTextRequest,
     api_key: str = Depends(get_api_key)
@@ -557,7 +560,7 @@ async def generate_recipe_text(
 
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
-@app.post("/module3/generate-recipe-image", response_model=GenerateRecipeImageResponse)
+@app.post("/module1/generate-recipe-image", response_model=GenerateRecipeImageResponse)
 async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
     http_request: Request,
@@ -637,7 +640,7 @@ async def generate_recipe_image(
                 detail=f"圖片生成錯誤: {error_msg}"
             )
 
-@app.post("/module3/analyze-food-image", response_model=FoodImageAnalysisResponse)
+@app.post("/module1/analyze-food-image", response_model=FoodImageAnalysisResponse)
 async def analyze_food_image(
     request: FoodImageAnalysisRequest,
 ):
@@ -658,6 +661,26 @@ async def analyze_food_image(
         # 使用 Gemini 分析圖片
         from google.genai import types
         
+        # 動態生成 prompt，讓 AI 以嚴格餐廳廚師的身份來評分
+        chef_prompt = f"""你是一位經驗豐富、要求嚴格的米其林星級餐廳主廚。請以專業廚師的眼光，嚴格分析這張食物圖片。
+
+顧客的期待：{request.dish_expect}
+
+請按照以下固定格式回覆：
+
+SCORE: [0-100分]
+(評分標準：0-30分=不合格，31-50分=需要改進，51-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
+
+ANALYSIS:
+[請以嚴格廚師的角度，詳細評語包括：
+1. 食物名稱和類型識別
+2. 外觀、顏色、擺盤的專業評估
+3. 營養搭配和食材選擇分析
+4. 與顧客期待的對比分析
+5. 改進建議和專業點評]
+
+請確保回覆格式完全按照上述模板，SCORE 必須是 0-100 的整數分數。以嚴格的專業標準來評分，不要過於寬鬆。"""
+        
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[
@@ -665,15 +688,59 @@ async def analyze_food_image(
                     data=image_bytes,
                     mime_type='image/png',
                 ),
-                request.prompt
+                chef_prompt
             ]
         )
         
+        # 解析 AI 回覆，提取分數和評語
+        response_text = response.text
+        
+        # 嘗試從回覆中提取分數和評語
+        score = 50  # 預設分數
+        analysis = response_text  # 預設使用完整回覆
+        
+        try:
+            # 尋找 SCORE: 標記
+            if "SCORE:" in response_text:
+                score_line = response_text.split("SCORE:")[1].split("\n")[0].strip()
+                # 提取數字
+                import re
+                score_match = re.search(r'\d+', score_line)
+                if score_match:
+                    score = int(score_match.group())
+                    # 確保分數在 0-100 範圍內
+                    score = max(0, min(100, score))
+            
+            # 尋找 ANALYSIS: 標記
+            if "ANALYSIS:" in response_text:
+                analysis_parts = response_text.split("ANALYSIS:")
+                if len(analysis_parts) > 1:
+                    analysis = analysis_parts[1].strip()
+                else:
+                    analysis = response_text
+            else:
+                # 如果沒有找到標記，嘗試智能分割
+                lines = response_text.split('\n')
+                # 跳過可能包含分數的前幾行，取後面的內容作為評語
+                analysis_lines = []
+                for line in lines:
+                    if not line.strip().startswith('SCORE:') and line.strip():
+                        analysis_lines.append(line)
+                if analysis_lines:
+                    analysis = '\n'.join(analysis_lines).strip()
+                    
+        except Exception as e:
+            logger.warning(f"解析 AI 回覆時出現問題: {e}，使用預設值")
+            score = 50
+            analysis = response_text
+        
         return FoodImageAnalysisResponse(
-            analysis=response.text,
+            analysis=analysis,
+            score=score,
             model_used="gemini-2.5-flash",
             image_hash=request.image_hash,
-            prompt=request.prompt
+            prompt=chef_prompt,
+            dish_expect=request.dish_expect
         )
         
     except FileNotFoundError:
