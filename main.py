@@ -186,6 +186,7 @@ class FoodImageAnalysisResponse(BaseModel):
     image_path: str = Field(..., description="分析的圖片路徑")
     prompt: str = Field(..., description="使用的提示詞")
     dish_expect: str = Field(..., description="顧客對這道菜的期待描述")
+    full_response_text: str = Field(..., description="Gemini 的完整回應文字")
 
 
 # 通用回應格式
@@ -612,16 +613,13 @@ async def analyze_food_image(
         
         # 動態生成 prompt，讓 AI 以嚴格餐廳廚師的身份來評分
         chef_prompt = f"""你是一位經驗豐富、要求嚴格的米其林星級餐廳主廚。請以專業廚師的眼光，嚴格分析這張食物圖片。
-
-顧客的期待：{request.dish_expect}
-
+他的期待：{request.dish_expect}
 請按照以下固定格式回覆：
-
 SCORE: [0-100分]
-(評分標準：0-29分=不合格，30-59分=需要改進，60-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
+(評分標準：0-59分=不合格，60-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
 
 ANALYSIS:
-[請以嚴格廚師的角度，詳細評語包括：
+[請以嚴格廚師的角度，詳細評語(不要超過200字)，包括：
 1. 食物名稱和類型識別
 2. 外觀、顏色、擺盤的專業評估
 3. 營養搭配和食材選擇分析
@@ -687,6 +685,7 @@ ANALYSIS:
             analysis=analysis,
             score=score,
             model_used="gemini-2.5-flash",
+            full_response_text=response_text,
             image_path=image_path,
             prompt=chef_prompt,
             dish_expect=request.dish_expect
@@ -704,6 +703,7 @@ ANALYSIS:
             detail=f"圖片分析錯誤: {str(e)}"
         )
 
+
 # 2. 模組二：魔法魚鉤 (Generative AI)
 @app.get("/module2/training-images", response_model=SuccessResponse)
 async def get_training_images(username: str = Depends(verify_token)):
@@ -715,6 +715,7 @@ async def get_training_images(username: str = Depends(verify_token)):
     return SuccessResponse(data={
         "images": selected_images
     })
+
 
 @app.post("/module2/submit-labels", response_model=SubmitLabelsResponse)
 async def submit_labels(
