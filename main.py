@@ -184,6 +184,7 @@ class FoodImageAnalysisResponse(BaseModel):
     image_hash: str = Field(..., description="分析的圖片hash")
     prompt: str = Field(..., description="使用的提示詞")
 
+
 # 通用回應格式
 class SuccessResponse(BaseModel):
     status: str = "success"
@@ -686,6 +687,7 @@ async def analyze_food_image(
             status_code=500,
             detail=f"Gemini API 錯誤: {str(e)}"
         )
+
 
 @app.get("/system-prompts")
 async def get_system_prompts():

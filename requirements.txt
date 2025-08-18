@@ -9,3 +9,5 @@ bcrypt
 openai
 aiofiles
 google-genai
+numpy
+scikit-learn
