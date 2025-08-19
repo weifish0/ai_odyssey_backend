@@ -207,7 +207,90 @@ class FoodImageAnalysisResponse(BaseModel):
     full_response_text: str = Field(..., description="Gemini 的完整回應文字")
 
 
+# Pydantic 模型 - AI English Writing Teacher 專案
+
+# 圖片辨識相關
+class ImageData(BaseModel):
+    data: str = Field(..., description="base64編碼的圖片數據")
+    mimeType: str = Field(..., description="圖片MIME類型")
+
+class OCRRequest(BaseModel):
+    images: List[ImageData] = Field(..., description="圖片列表")
+    system_prompt: str = Field(..., description="系統提示詞")
+
+class TopicOCRResponse(BaseModel):
+    topic: str = Field(..., description="作文的主題或問題")
+    requirements: str = Field(..., description="題目要求")
+    score: str = Field(..., description="分數或佔比")
+
+class EssayOCRResponse(BaseModel):
+    recognized_text: str = Field(..., description="辨識出的完整英文作文文字")
+
+# 作文批改相關
+class TopicInfo(BaseModel):
+    topic: str = Field(..., description="作文題目")
+    requirements: str = Field(..., description="題目要求")
+    score: int = Field(..., description="分數")
+
+class CorrectionRequest(BaseModel):
+    essay_text: str = Field(..., description="學生的英文作文內容")
+    topic_info: TopicInfo = Field(..., description="題目資訊")
+    system_prompt: str = Field(..., description="系統提示詞")
+
+class ScoreDetail(BaseModel):
+    score: float = Field(..., description="分數")
+    comment: str = Field(..., description="評語")
+
+class FeedbackItem(BaseModel):
+    type: str = Field(..., description="錯誤類型")
+    original: str = Field(..., description="原始錯誤")
+    suggestion: str = Field(..., description="建議修正")
+    explanation: str = Field(..., description="解釋說明")
+
+class CorrectionResponse(BaseModel):
+    scores: Dict[str, ScoreDetail] = Field(..., description="各項評分")
+    total_score: float = Field(..., description="總分")
+    detailed_feedback: List[FeedbackItem] = Field(..., description="詳細回饋")
+    overall_comment: str = Field(..., description="整體評語")
+    rewritten_essay: str = Field(..., description="改寫後的範文")
+
+# 講義生成相關
+class HandoutRequest(BaseModel):
+    correction_data: Dict[str, List[FeedbackItem]] = Field(..., description="批改資料")
+    system_prompt: str = Field(..., description="系統提示詞")
+
+class HandoutResponse(BaseModel):
+    handout_content: str = Field(..., description="生成的講義內容")
+
+# 練習題生成相關
+class PracticeRequest(BaseModel):
+    correction_data: Dict[str, List[FeedbackItem]] = Field(..., description="批改資料")
+    num_questions: int = Field(..., description="題目數量")
+    num_versions: int = Field(..., description="版本數量")
+    system_prompt: str = Field(..., description="系統提示詞")
+
+class PracticeQuestion(BaseModel):
+    question: str = Field(..., description="題目內容")
+    options: List[str] = Field(..., description="選項")
+
+class PracticeAnswer(BaseModel):
+    answer: str = Field(..., description="答案")
+    explanation: str = Field(..., description="答案解釋")
+
+class PracticeVersion(BaseModel):
+    title: str = Field(..., description="版本標題")
+    questions: List[PracticeQuestion] = Field(..., description="題目列表")
+    answers: List[PracticeAnswer] = Field(..., description="答案列表")
+
+class PracticeResponse(BaseModel):
+    versions: List[PracticeVersion] = Field(..., description="練習題版本")
+
 # 通用回應格式
+class AIWritingTeacherResponse(BaseModel):
+    success: bool = Field(..., description="是否成功")
+    data: Optional[Dict[str, Any]] = Field(None, description="回應資料")
+    error: Optional[Dict[str, Any]] = Field(None, description="錯誤資訊")
+
 class SuccessResponse(BaseModel):
     status: str = "success"
     data: Dict[str, Any]
@@ -390,7 +473,7 @@ async def chat_with_llm(
     request: LLMChatRequest,      
     api_key: str = Depends(get_api_key)
 ):
-    """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 1000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
+    """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 2000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
     try:
         # 建立訊息列表
         messages = [
@@ -409,7 +492,7 @@ async def chat_with_llm(
             "model": "gpt-oss-120b",
             "messages": messages,
             "temperature": 0.4,
-            "max_tokens": 1000
+            "max_tokens": 2000
         }
         
         async with httpx.AsyncClient() as client:
@@ -845,7 +928,527 @@ async def identify_fish(username: str = Depends(verify_token)):
             value_gained=0,
             message="是吳郭魚！AI 魔法魚鉤將牠放回去了。"
         )     
+
+# ============================================================================
+# AI English Writing Teacher 專案 API 端點
+# ============================================================================
+
+# 1. 題目圖片辨識接口
+@app.post("/api/ocr/topic", response_model=AIWritingTeacherResponse)
+async def ocr_topic(request: OCRRequest):
+    """題目圖片辨識接口"""
+    try:
+        # 檢查是否有圖片
+        if not request.images:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INVALID_REQUEST",
+                    "message": "請提供圖片",
+                    "details": "images 欄位不能為空"
+                }
+            )
         
+        # 使用 Gemini 進行圖片辨識
+        from google.genai import types
+        
+        # 配置 Gemini 客戶端
+        gemini_api_key = os.getenv("AI_ENGLISH_WRITING_TEACHER")
+        if not gemini_api_key:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Gemini API Key 未設定",
+                    "details": "請設定 AI_ENGLISH_WRITING_TEACHER 環境變數"
+                }
+            )
+        
+        client = genai.Client(api_key=gemini_api_key)
+        
+        # 處理第一張圖片（題目辨識通常只需要一張）
+        image_data = request.images[0]
+        
+        # 將 base64 轉換為 bytes
+        import base64
+        try:
+            image_bytes = base64.b64decode(image_data.data)
+        except Exception as e:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INVALID_IMAGE_FORMAT",
+                    "message": "圖片格式錯誤",
+                    "details": f"base64 解碼失敗: {str(e)}"
+                }
+            )
+        
+        # 使用 Gemini 進行圖片辨識
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=image_data.mimeType,
+                ),
+                request.system_prompt
+            ]
+        )
+        
+        # 解析回應（假設 AI 會返回 JSON 格式）
+        try:
+            import json
+            # 嘗試從回應中提取 JSON
+            response_text = response.text
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                if json_end != -1:
+                    json_str = response_text[json_start:json_end].strip()
+                    result = json.loads(json_str)
+                else:
+                    result = {"topic": "無法解析", "requirements": "無法解析", "score": "無法解析"}
+            else:
+                # 如果沒有 JSON 標記，嘗試直接解析
+                result = json.loads(response_text)
+        except json.JSONDecodeError:
+            # 如果 JSON 解析失敗，使用預設格式
+            result = {
+                "topic": "圖片辨識完成，但格式解析失敗",
+                "requirements": "請檢查 AI 回應格式",
+                "score": "無法確定"
+            }
+        
+        return AIWritingTeacherResponse(
+            success=True,
+            data=result,
+            error=None
+        )
+        
+    except Exception as e:
+        logger.error(f"題目圖片辨識失敗: {e}")
+        return AIWritingTeacherResponse(
+            success=False,
+            data=None,
+            error={
+                "code": "OCR_FAILED",
+                "message": "圖片辨識失敗",
+                "details": str(e)
+            }
+        )
+
+# 2. 手寫作文辨識接口
+@app.post("/api/ocr/essay", response_model=AIWritingTeacherResponse)
+async def ocr_essay(request: OCRRequest):
+    """手寫作文辨識接口"""
+    try:
+        # 檢查是否有圖片
+        if not request.images:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INVALID_REQUEST",
+                    "message": "請提供圖片",
+                    "details": "images 欄位不能為空"
+                }
+            )
+        
+        # 使用 Gemini 進行圖片辨識
+        from google.genai import types
+        
+        # 配置 Gemini 客戶端
+        gemini_api_key = os.getenv("AI_ENGLISH_WRITING_TEACHER")
+        if not gemini_api_key:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Gemini API Key 未設定",
+                    "details": "請設定 AI_ENGLISH_WRITING_TEACHER 環境變數"
+                }
+            )
+        
+        client = genai.Client(api_key=gemini_api_key)
+        
+        # 處理所有圖片（手寫作文可能需要多張圖片）
+        all_texts = []
+        
+        for image_data in request.images:
+            # 將 base64 轉換為 bytes
+            import base64
+            try:
+                image_bytes = base64.b64decode(image_data.data)
+            except Exception as e:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "INVALID_IMAGE_FORMAT",
+                        "message": "圖片格式錯誤",
+                        "details": f"base64 解碼失敗: {str(e)}"
+                    }
+                )
+            
+            # 使用 Gemini 進行圖片辨識
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=image_data.mimeType,
+                    ),
+                    request.system_prompt
+                ]
+            )
+            
+            all_texts.append(response.text)
+        
+        # 合併所有辨識出的文字
+        combined_text = " ".join(all_texts)
+        
+        return AIWritingTeacherResponse(
+            success=True,
+            data={"recognized_text": combined_text},
+            error=None
+        )
+        
+    except Exception as e:
+        logger.error(f"手寫作文辨識失敗: {e}")
+        return AIWritingTeacherResponse(
+            success=False,
+            data=None,
+            error={
+                "code": "OCR_FAILED",
+                "message": "手寫作文辨識失敗",
+                "details": str(e)
+            }
+        )
+
+# 3. 作文批改接口
+@app.post("/api/ai/correction", response_model=AIWritingTeacherResponse)
+async def correct_essay(request: CorrectionRequest):
+    """作文批改接口"""
+    try:
+        # 使用 gpt-oss-120b 進行作文批改
+        nchc_api_key = os.getenv("NCHC_API_KEY")
+        if not nchc_api_key:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "NCHC API Key 未設定",
+                    "details": "請設定 NCHC_API_KEY 環境變數"
+                }
+            )
+        
+        # 準備請求
+        messages = [
+            {
+                "role": "system",
+                "content": request.system_prompt
+            },
+            {
+                "role": "user",
+                "content": f"題目資訊：{request.topic_info.topic}\n要求：{request.topic_info.requirements}\n分數：{request.topic_info.score}\n\n學生作文：{request.essay_text}"
+            }
+        ]
+        
+        chat_request = {
+            "model": "gpt-oss-120b",
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": 20000
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{NCHC_API_BASE_URL}/chat/completions",
+                headers={
+                    "x-api-key": nchc_api_key,
+                    "Content-Type": "application/json"
+                },
+                json=chat_request,
+                timeout=60.0
+            )
+            
+            if response.status_code != 200:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "AI 生成失敗",
+                        "details": f"NCHC API 錯誤: {response.text}"
+                    }
+                )
+            
+            result = response.json()
+            
+            # 提取回應內容
+            if result.get("choices") and len(result["choices"]) > 0:
+                ai_response = result["choices"][0]["message"]["content"]
+            else:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "AI 回應格式錯誤",
+                        "details": "無法提取 AI 回應內容"
+                    }
+                )
+            
+            # 嘗試解析 AI 回應（假設會返回結構化數據）
+            try:
+                import json
+                if "```json" in ai_response:
+                    json_start = ai_response.find("```json") + 7
+                    json_end = ai_response.find("```", json_start)
+                    if json_end != -1:
+                        json_str = ai_response[json_start:json_end].strip()
+                        correction_data = json.loads(json_str)
+                    else:
+                        correction_data = {"error": "無法解析 JSON 格式"}
+                else:
+                    correction_data = {"raw_response": ai_response}
+                
+                return AIWritingTeacherResponse(
+                    success=True,
+                    data=correction_data,
+                    error=None
+                )
+                
+            except json.JSONDecodeError:
+                return AIWritingTeacherResponse(
+                    success=True,
+                    data={"raw_response": ai_response},
+                    error=None
+                )
+                
+    except Exception as e:
+        logger.error(f"作文批改失敗: {e}")
+        return AIWritingTeacherResponse(
+            success=False,
+            data=None,
+            error={
+                "code": "AI_GENERATION_FAILED",
+                "message": "作文批改失敗",
+                "details": str(e)
+            }
+        )
+
+# 4. 講義生成接口
+@app.post("/api/ai/handout", response_model=AIWritingTeacherResponse)
+async def generate_handout(request: HandoutRequest):
+    """講義生成接口"""
+    try:
+        # 使用 gpt-oss-120b 生成講義
+        nchc_api_key = os.getenv("NCHC_API_KEY")
+        if not nchc_api_key:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "NCHC API Key 未設定",
+                    "details": "請設定 NCHC_API_KEY 環境變數"
+                }
+            )
+        
+        # 準備請求
+        messages = [
+            {
+                "role": "system",
+                "content": request.system_prompt
+            },
+            {
+                "role": "user",
+                "content": f"批改資料：{json.dumps(request.correction_data, ensure_ascii=False)}"
+            }
+        ]
+        
+        chat_request = {
+            "model": "gpt-oss-120b",
+            "messages": messages,
+            "temperature": 0.4,
+            "max_tokens": 20000
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{NCHC_API_BASE_URL}/chat/completions",
+                headers={
+                    "x-api-key": nchc_api_key,
+                    "Content-Type": "application/json"
+                },
+                json=chat_request,
+                timeout=60.0
+            )
+            
+            if response.status_code != 200:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "講義生成失敗",
+                        "details": f"NCHC API 錯誤: {response.text}"
+                    }
+                )
+            
+            result = response.json()
+            
+            # 提取回應內容
+            if result.get("choices") and len(result["choices"]) > 0:
+                handout_content = result["choices"][0]["message"]["content"]
+            else:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "講義生成失敗",
+                        "details": "無法提取 AI 回應內容"
+                    }
+                )
+            
+            return AIWritingTeacherResponse(
+                success=True,
+                data={"handout_content": handout_content},
+                error=None
+            )
+                
+    except Exception as e:
+        logger.error(f"講義生成失敗: {e}")
+        return AIWritingTeacherResponse(
+            success=False,
+            data=None,
+            error={
+                "code": "AI_GENERATION_FAILED",
+                "message": "講義生成失敗",
+                "details": str(e)
+            }
+        )
+
+# 5. 練習題生成接口
+@app.post("/api/ai/practice", response_model=AIWritingTeacherResponse)
+async def generate_practice_questions(request: PracticeRequest):
+    """練習題生成接口"""
+    try:
+        # 使用 gpt-oss-120b 生成練習題
+        nchc_api_key = os.getenv("NCHC_API_KEY")
+        if not nchc_api_key:
+            return AIWritingTeacherResponse(
+                success=False,
+                data=None,
+                error={
+                    "code": "INTERNAL_ERROR",
+                    "message": "NCHC API Key 未設定",
+                    "details": "請設定 NCHC_API_KEY 環境變數"
+                }
+            )
+        
+        # 準備請求
+        messages = [
+            {
+                "role": "system",
+                "content": request.system_prompt
+            },
+            {
+                "role": "user",
+                "content": f"批改資料：{json.dumps(request.correction_data, ensure_ascii=False)}\n題目數量：{request.num_questions}\n版本數量：{request.num_versions}"
+            }
+        ]
+        
+        chat_request = {
+            "model": "gpt-oss-120b",
+            "messages": messages,
+            "temperature": 0.5,
+            "max_tokens": 20000
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{NCHC_API_BASE_URL}/chat/completions",
+                headers={
+                    "x-api-key": nchc_api_key,
+                    "Content-Type": "application/json"
+                },
+                json=chat_request,
+                timeout=60.0
+            )
+            
+            if response.status_code != 200:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "練習題生成失敗",
+                        "details": f"NCHC API 錯誤: {response.text}"
+                    }
+                )
+            
+            result = response.json()
+            
+            # 提取回應內容
+            if result.get("choices") and len(result["choices"]) > 0:
+                practice_content = result["choices"][0]["message"]["content"]
+            else:
+                return AIWritingTeacherResponse(
+                    success=False,
+                    data=None,
+                    error={
+                        "code": "AI_GENERATION_FAILED",
+                        "message": "練習題生成失敗",
+                        "details": "無法提取 AI 回應內容"
+                    }
+                )
+            
+            # 嘗試解析 AI 回應
+            try:
+                import json
+                if "```json" in practice_content:
+                    json_start = practice_content.find("```json") + 7
+                    json_end = practice_content.find("```", json_start)
+                    if json_end != -1:
+                        json_str = practice_content[json_start:json_end].strip()
+                        practice_data = json.loads(json_str)
+                    else:
+                        practice_data = {"raw_response": practice_content}
+                else:
+                    practice_data = {"raw_response": practice_content}
+                
+                return AIWritingTeacherResponse(
+                    success=True,
+                    data=practice_data,
+                    error=None
+                )
+                
+            except json.JSONDecodeError:
+                return AIWritingTeacherResponse(
+                    success=True,
+                    data={"raw_response": practice_content},
+                    error=None
+                )
+                
+    except Exception as e:
+        logger.error(f"練習題生成失敗: {e}")
+        return AIWritingTeacherResponse(
+            success=False,
+            data=None,
+            error={
+                "code": "AI_GENERATION_FAILED",
+                "message": "練習題生成失敗",
+                "details": str(e)
+            }
+        )
 
 @app.get("/system-prompts")
 async def get_system_prompts():
