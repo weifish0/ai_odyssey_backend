@@ -18,6 +18,7 @@ import aiofiles
 from fastapi.staticfiles import StaticFiles
 import json
 from google import genai
+from fastapi.encoders import jsonable_encoder
 
 # 載入環境變數
 load_dotenv()
@@ -999,35 +1000,33 @@ async def ocr_topic(request: OCRRequest):
         )
         
         # 解析回應（假設 AI 會返回 JSON 格式）
-        try:
-            import json
-            # 嘗試從回應中提取 JSON
-            response_text = response.text
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                if json_end != -1:
-                    json_str = response_text[json_start:json_end].strip()
-                    result = json.loads(json_str)
-                else:
-                    result = {"topic": "無法解析", "requirements": "無法解析", "score": "無法解析"}
+        response_text = response.text
+        if "```json" in response_text:
+            json_start = response_text.find("```json") + 7
+            json_end = response_text.find("```", json_start)
+            if json_end != -1:
+                json_str = response_text[json_start:json_end].strip()
+                result = json.loads(json_str)
             else:
-                # 如果沒有 JSON 標記，嘗試直接解析
-                result = json.loads(response_text)
-        except json.JSONDecodeError:
-            # 如果 JSON 解析失敗，使用預設格式
-            result = {
-                "topic": "圖片辨識完成，但格式解析失敗",
-                "requirements": "請檢查 AI 回應格式",
-                "score": "無法確定"
-            }
-        
+                result = {"topic": "無法解析", "requirements": "無法解析", "score": "無法解析"}
+        else:
+            # 如果沒有 JSON 標記，嘗試直接解析
+            result = json.loads(response_text)
+
         return AIWritingTeacherResponse(
             success=True,
             data=result,
             error=None
         )
         
+    except json.JSONDecodeError:
+        # 如果 JSON 解析失敗，使用預設格式
+        result = {
+            "topic": "圖片辨識完成，但格式解析失敗",
+            "requirements": "請檢查 AI 回應格式",
+            "score": "無法確定"
+        }
+        return AIWritingTeacherResponse(success=True, data=result, error=None)
     except Exception as e:
         logger.error(f"題目圖片辨識失敗: {e}")
         return AIWritingTeacherResponse(
@@ -1269,7 +1268,7 @@ async def generate_handout(request: HandoutRequest):
             },
             {
                 "role": "user",
-                "content": f"批改資料：{json.dumps(request.correction_data, ensure_ascii=False)}"
+                "content": f"批改資料：{json.dumps(jsonable_encoder(request.correction_data), ensure_ascii=False)}"
             }
         ]
         
@@ -1362,7 +1361,7 @@ async def generate_practice_questions(request: PracticeRequest):
             },
             {
                 "role": "user",
-                "content": f"批改資料：{json.dumps(request.correction_data, ensure_ascii=False)}\n題目數量：{request.num_questions}\n版本數量：{request.num_versions}"
+                "content": f"批改資料：{json.dumps(jsonable_encoder(request.correction_data), ensure_ascii=False)}\n題目數量：{request.num_questions}\n版本數量：{request.num_versions}"
             }
         ]
         
@@ -1412,32 +1411,29 @@ async def generate_practice_questions(request: PracticeRequest):
                 )
             
             # 嘗試解析 AI 回應
-            try:
-                import json
-                if "```json" in practice_content:
-                    json_start = practice_content.find("```json") + 7
-                    json_end = practice_content.find("```", json_start)
-                    if json_end != -1:
-                        json_str = practice_content[json_start:json_end].strip()
-                        practice_data = json.loads(json_str)
-                    else:
-                        practice_data = {"raw_response": practice_content}
+            if "```json" in practice_content:
+                json_start = practice_content.find("```json") + 7
+                json_end = practice_content.find("```", json_start)
+                if json_end != -1:
+                    json_str = practice_content[json_start:json_end].strip()
+                    practice_data = json.loads(json_str)
                 else:
                     practice_data = {"raw_response": practice_content}
+            else:
+                practice_data = {"raw_response": practice_content}
+            
+            return AIWritingTeacherResponse(
+                success=True,
+                data=practice_data,
+                error=None
+            )
                 
-                return AIWritingTeacherResponse(
-                    success=True,
-                    data=practice_data,
-                    error=None
-                )
-                
-            except json.JSONDecodeError:
-                return AIWritingTeacherResponse(
-                    success=True,
-                    data={"raw_response": practice_content},
-                    error=None
-                )
-                
+    except json.JSONDecodeError:
+        return AIWritingTeacherResponse(
+            success=True,
+            data={"raw_response": "AI 回應的 JSON 解析失敗"},
+            error=None
+        )
     except Exception as e:
         logger.error(f"練習題生成失敗: {e}")
         return AIWritingTeacherResponse(
