@@ -172,6 +172,24 @@ class GenerateRecipeImageResponse(BaseModel):
         "file_path": "static/images/d1b094d315f4.png",
         "full_url": "https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png"
     })
+    
+class GenerateCustomImageResponse(BaseModel):
+    image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
+    prompt: str = Field(..., example="李久恩穿著紅色褲褲，手拿十字架，冷傲退基佬，寫實畫風，高清")
+    model_used: str = Field(..., example="dall-e-3")
+    image_size: str = Field(..., example="1024x1024")
+    generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
+    generation_date: str = Field(..., example="2024-01-15")
+    generation_timestamp: float = Field(..., example=1705311045.123456)
+    file_info: Dict[str, Any] = Field(..., example={
+        "original_filename": "d1b094d315f4.png",
+        "file_path": "static/images/d1b094d315f4.png",
+        "full_url": "https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png"
+    })
+    
+class GenerateCustomImageRequest(BaseModel):
+    prompt: str = Field(..., example="李久恩穿著紅色褲褲，手拿十字架，冷傲退基佬，寫實畫風，高清", description="客製化圖片生成")
+    
 
 # Pydantic 模型 - 食物圖片分析相關
 class FoodImageAnalysisRequest(BaseModel):
@@ -318,13 +336,10 @@ async def register(user_data: UserRegister):
     }
     
     return {
-        "status": "success",
-        "data": {
-            "message": "註冊成功！",
-            "user": {
-                "id": user_id,
-                "username": user_data.username
-            }
+        "message": "註冊成功！",
+        "user": {
+            "id": user_id,
+            "username": user_data.username
         }
     }
 
@@ -351,12 +366,9 @@ async def login(user_data: UserLogin):
     )
     
     return {
-        "status": "success",
-        "data": {
-            "message": "登入成功！",
-            "access_token": access_token,
-            "token_type": "bearer"
-        }
+        "message": "登入成功！",
+        "access_token": access_token,
+        "token_type": "bearer"
     }
 
 @app.get("/users/me", response_model=SuccessResponse)
@@ -371,14 +383,14 @@ async def get_current_user(username: str = Depends(verify_token)):
         }
     })
 
-@app.post("/llama4", response_model=LLMChatResponse)
+@app.post("/llmchat", response_model=LLMChatResponse)
 # TODO: 需要驗證 token
 # username: str = Depends(verify_token),
 async def chat_with_llm(
     request: LLMChatRequest,      
     api_key: str = Depends(get_api_key)
 ):
-    """與 LLM 進行對話，使用llama4模型，temp 0.4，max_tokens 1000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
+    """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 1000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
     try:
         # 建立訊息列表
         messages = [
@@ -394,7 +406,7 @@ async def chat_with_llm(
         
         # 準備請求
         chat_request = {
-            "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+            "model": "gpt-oss-120b",
             "messages": messages,
             "temperature": 0.4,
             "max_tokens": 1000
@@ -463,7 +475,7 @@ async def generate_recipe_text(
         
         # 準備請求
         chat_request = {
-            "model": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+            "model": "gpt-oss-120b",
             "messages": messages,
             "temperature": 0.8,
             "max_tokens": 1500
@@ -506,6 +518,83 @@ async def generate_recipe_text(
     except Exception as e:
         logger.error(f"未預期錯誤: {e}")
         raise HTTPException(status_code=500, detail=f"未預期錯誤: {str(e)}")
+
+
+@app.post("/generate-custom-image", response_model=GenerateCustomImageResponse)
+async def generate_custom_image(
+    request: GenerateCustomImageRequest,
+    http_request: Request,
+    client: OpenAI = Depends(get_openai_client)
+):
+    """完全客製化圖片生成，使用 DALL-E 3 模型"""
+    try:      
+        # 使用 DALL-E 生成圖片
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=request.prompt,
+            n=1,
+            size="1024x1024"
+        )
+        
+        # 直接取得圖片 URL
+        if response.data and len(response.data) > 0:
+            image_url = response.data[0].url
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="圖片生成失敗"
+            )
+        
+        # 下載並保存圖片到本地
+        filename = await download_and_save_image(image_url, request.prompt)
+        
+        # 返回本地圖片 URL
+        base_url = str(http_request.base_url).rstrip('/')
+        local_image_url = f"{base_url}/static/images/{filename}"
+        
+        # 記錄生成時間
+        generation_time = datetime.now()
+        
+        return GenerateCustomImageResponse(
+            image_url=local_image_url,
+            prompt=request.prompt,
+            model_used="dall-e-3",
+            image_size="1024x1024",
+            generation_time=generation_time.isoformat(),
+            generation_date=generation_time.strftime("%Y-%m-%d"),
+            generation_timestamp=generation_time.timestamp(),
+            file_info={
+                "original_filename": filename,
+                "file_path": f"static/images/{filename}",
+                "full_url": local_image_url
+            }
+        )
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"圖片生成錯誤: {error_msg}")
+        
+        # 處理特定的 OpenAI 錯誤
+        if "content_policy_violation" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="提示詞內容違反安全政策，請使用更適當的描述。"
+            )
+        elif "safety_system" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="提示詞被安全系統拒絕，請避免使用可能不當的詞彙。"
+            )
+        elif "400" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="請求格式錯誤，請檢查提示詞內容。建議：使用清晰、具體的食物描述。"
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"圖片生成錯誤: {error_msg}"
+            )
 
 
 # TODO: 需要驗證 token
@@ -762,10 +851,7 @@ async def identify_fish(username: str = Depends(verify_token)):
 async def get_system_prompts():
     """取得可用的 system prompts 列表"""
     return {
-        "status": "success",
-        "data": {
-            "prompts": system_prompts
-        }
+        "prompts": system_prompts
     }
 
 @app.get("/models")
@@ -773,11 +859,11 @@ async def list_models():
     """取得可用模型列表 - 向後相容"""
     return {
         "models": [
-            {
-                "id": "Llama-4-Maverick-17B-128E-Instruct-FP8",
-                "name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
-                "description": "Llama-4-Maverick-17B-128E-Instruct-FP8"
-            }
+            "Llama-4-Maverick-17B-128E-Instruct-FP8",
+            "gpt-oss-120b",
+            "gemini-2.5-flash",
+            "dall-e-3",
+            "gemini-embedding-001"
         ]
     }
 
