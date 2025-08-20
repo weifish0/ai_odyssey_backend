@@ -194,7 +194,7 @@ class GenerateCustomImageRequest(BaseModel):
 
 # Pydantic 模型 - 食物圖片分析相關
 class FoodImageAnalysisRequest(BaseModel):
-    image_hash: str = Field(..., description="圖片12位數hash", example="a0f7cfb81fbf")
+    image_hash: str = Field(..., description="圖片12位數hash", example="a0f7cfb81fbf.png")
     dish_expect: Optional[str] = Field(default="我期待這是一道色香味俱全、營養均衡、擺盤精美的美食", description="對這道菜的期待描述，如果不填寫將使用預設期待")
     
 
@@ -786,20 +786,20 @@ async def analyze_food_image(
         
         # 動態生成 prompt，讓 AI 以嚴格餐廳廚師的身份來評分
         chef_prompt = f"""你是一位經驗豐富、要求嚴格的米其林星級餐廳主廚。請以專業廚師的眼光，嚴格分析這張食物圖片。
-他的期待：{request.dish_expect}
+對食物的期待：{request.dish_expect}
 請按照以下固定格式回覆：
 SCORE: [0-100分]
 (評分標準：0-59分=不合格，60-70分=及格，71-85分=良好，86-95分=優秀，96-100分=完美)
 
 ANALYSIS:
-[請以嚴格廚師的角度，詳細評語(不要超過200字)，包括：
+[請以嚴格廚師的角度，詳細評語(不要超過150字，不要條列式回答，不要使用markdown格式語法如"**")，包括：
 1. 食物名稱和類型識別
 2. 外觀、顏色、擺盤的專業評估
 3. 營養搭配和食材選擇分析
 4. 與顧客期待的對比分析
 5. 改進建議和專業點評]
 
-請確保回覆格式完全按照上述模板，SCORE 必須是 0-100 的整數分數。以嚴格的專業標準來評分，不要過於寬鬆。"""
+請確保回覆格式完全按照上述模板，SCORE 必須是 0-100 的整數分數。以嚴格的專業標準來評分。"""
         
         response = client.models.generate_content(
             model="gemini-2.5-flash",
