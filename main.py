@@ -8,7 +8,7 @@ import os
 import uuid
 import jwt
 import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import logging
 import random
@@ -58,15 +58,25 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ 載入 MobileNet 基礎模型失敗: {e}")
         GLOBAL_MOBILENET = None
     
+    # 啟動定期清理任務
+    import asyncio
+    cleanup_task = asyncio.create_task(cleanup_expired_tokens_task())
+    logger.info("✅ 定期清理過期 token 任務已啟動")
+    
     yield
     
-    # 在應用程式關閉時執行的程式碼 (可選)
+    # 在應用程式關閉時執行的程式碼
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     logger.info("伺服器正在關閉...")
 
 app = FastAPI(
     title="AI Odyssey Backend API",
     description="AI 學習遊戲平台後端 API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -83,23 +93,13 @@ app.add_middleware(
 security = HTTPBearer()
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 300
 
-# 模擬資料庫 (實際應用中應該使用真實資料庫)
-users_db = {
-    "will":   {
-        "id": "123456789",
-        "username": "will",
-        "hashed_password": "mypassword",
-        "money": 300000
-    },
-    "9n":{
-        "id": "999999999",
-        "username": "9n",
-        "hashed_password": "9nhaha1234",
-        "money": 300000
-    }
-}
+# 導入 SQLite 資料庫管理器
+from database import db_manager
+
+# 初始化資料庫（在應用程式啟動時會自動創建表格）
+logger.info("正在初始化 SQLite 資料庫...")
 
 # NCHC API 設定
 NCHC_API_BASE_URL = "https://portal.genai.nchc.org.tw/api/v1"
@@ -143,6 +143,17 @@ system_prompts = load_system_prompts()
 STATIC_IMAGES_DIR = "static/images"
 os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
 
+# 定期清理過期 token 的任務
+async def cleanup_expired_tokens_task():
+    """定期清理過期的 token 和會話"""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(3600)  # 每小時執行一次
+            db_manager.cleanup_expired_tokens()
+        except Exception as e:
+            logger.error(f"清理過期 token 任務失敗: {e}")
+
 # 設定靜態檔案服務 (在資料夾創建之後)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -179,7 +190,7 @@ class GenerateRecipeTextResponse(BaseModel):
     recipe_text: str = Field(..., example="✨ 魔法森林的彩虹水果沙拉 ✨\n\n這道菜就像森林精靈的魔法盛宴！我們需要：\n\n🍎 紅蘋果 - 切成小星星形狀\n🍊 橘子 - 剝成小月牙\n🍇 葡萄 - 像珍珠一樣閃亮\n🥝 奇異果 - 切成小圓片\n\n調味魔法：\n🍯 蜂蜜 - 森林的甜蜜精華\n🍋 檸檬汁 - 清新的魔法\n🌿 薄荷葉 - 森林的香氣\n\n做法：\n1. 將所有水果洗淨，切成可愛的形狀\n2. 輕輕混合，不要破壞水果的完整性\n3. 淋上蜂蜜和檸檬汁的魔法組合\n4. 最後點綴新鮮的薄荷葉\n\n這道沙拉不僅美味，還能讓國王想起森林的快樂時光！🌈")
 
 class GenerateRecipeImageRequest(BaseModel):
-    prompt: str = Field(..., description="圖片生成提示詞")
+    prompt: str = Field(..., example="宮保雞丁",description="圖片生成提示詞")
 
 class GenerateRecipeImageResponse(BaseModel):
     image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
@@ -336,23 +347,51 @@ class ErrorResponse(BaseModel):
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        token = credentials.credentials
+        
+        # 先檢查 token 是否在黑名單中
+        if db_manager.is_token_blacklisted(token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token 已被撤銷",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        if username is None or username not in users_db:
+        if username is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="無效的認證憑證",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        
+        # 從資料庫驗證使用者
+        user = db_manager.get_user_by_username(username)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="使用者不存在",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # 檢查會話是否仍然有效
+        if not db_manager.is_session_valid(token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="會話已過期或已被登出",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
         return username
     except jwt.PyJWTError:
         raise HTTPException(
@@ -384,7 +423,7 @@ async def download_and_save_image(image_url: str, prompt: str) -> str:
     """下載圖片並保存到本地，返回本地檔案路徑"""
     try:
         # 生成隨機 hash 值
-        timestamp = str(datetime.now().timestamp())
+        timestamp = str(datetime.now(timezone.utc).timestamp())
         random_salt = str(random.randint(1000, 9999))
         hash_input = f"{prompt}{timestamp}{random_salt}"
         file_hash = hashlib.md5(hash_input.encode()).hexdigest()[:12]
@@ -419,7 +458,7 @@ async def root():
     """根路徑"""
     return {
         "message": "AI Odyssey Backend API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs"
     }
 
@@ -433,77 +472,160 @@ async def health_check():
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserRegister):
     """使用者註冊"""
-    if user_data.username in users_db:
+    try:
+        # 使用資料庫管理器創建使用者
+        user = db_manager.create_user(
+            username=user_data.username,
+            password=user_data.password,
+            initial_money=0
+        )
+        
+        return {
+            "message": "註冊成功！",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "money": user["money"]
+            }
+        }
+        
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="使用者名稱已被註冊。"
+            detail=str(e)
         )
-    
-    # 加密密碼
-    hashed_password = bcrypt.hashpw(user_data.password.encode('utf-8'), bcrypt.gensalt())
-    
-    # 建立使用者
-    user_id = str(uuid.uuid4())
-    users_db[user_data.username] = {
-        "id": user_id,
-        "username": user_data.username,
-        "hashed_password": hashed_password,
-        "money": 500
-    }
-    
-    return {
-        "message": "註冊成功！",
-        "user": {
-            "id": user_id,
-            "username": user_data.username
-        }
-    }
+    except Exception as e:
+        logger.error(f"註冊失敗: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="註冊過程中發生錯誤，請稍後再試。"
+        )
 
 @app.post("/auth/login")
 async def login(user_data: UserLogin):
     """使用者登入"""
-    if user_data.username not in users_db:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="帳號或密碼錯誤。"
+    try:
+        # 使用資料庫管理器驗證使用者
+        user = db_manager.verify_user(user_data.username, user_data.password)
+        
+        if not user:
+            # 為了安全性，不區分帳號不存在和密碼錯誤
+            # 但提供更友善的錯誤訊息
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="登入失敗：請檢查您的帳號名稱和密碼是否正確。如果忘記密碼，請聯繫管理員。",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        # 建立 JWT token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user_data.username}, expires_delta=access_token_expires
         )
-    
-    user = users_db[user_data.username]
-    if not bcrypt.checkpw(user_data.password.encode('utf-8'), user["hashed_password"]):
+        
+        # 創建資料庫會話記錄
+        expires_at = datetime.now(timezone.utc) + access_token_expires
+        db_manager.create_session(user["id"], access_token, expires_at)
+        
+        # 記錄成功登入
+        logger.info(f"使用者 {user_data.username} 登入成功")
+        
+        return {
+            "message": "登入成功！",
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "money": user["money"]
+            }
+        }
+        
+    except ValueError as e:
+        # 處理特定的業務邏輯錯誤（如帳號被停用）
+        error_message = str(e)
+        if "帳號已被停用" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="帳號已被停用，請聯繫管理員。"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message
+            )
+    except HTTPException:
+        # 重新拋出 HTTP 異常
+        raise
+    except Exception as e:
+        # 記錄詳細錯誤資訊
+        logger.error(f"登入過程中發生未預期錯誤: {e}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="帳號或密碼錯誤。"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="登入過程中發生系統錯誤，請稍後再試。如果問題持續發生，請聯繫技術支援。"
         )
-    
-    # 建立 JWT token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user_data.username}, expires_delta=access_token_expires
-    )
-    
-    return {
-        "message": "登入成功！",
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
 
 @app.get("/users/me", response_model=SuccessResponse)
 async def get_current_user(username: str = Depends(verify_token)):
     """獲取當前使用者資訊"""
-    user = users_db[username]
-    return SuccessResponse(data={
-        "user": {
-            "id": user["id"],
-            "username": user["username"],
-            "money": user["money"]
-        }
-    })
+    try:
+        user = db_manager.get_user_by_username(username)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="使用者不存在"
+            )
+        
+        return SuccessResponse(data={
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "money": user["money"],
+                "created_at": user["created_at"],
+                "last_login": user["last_login"]
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"獲取使用者資訊失敗: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="獲取使用者資訊失敗"
+        )
+
+@app.post("/auth/logout")
+async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """使用者登出"""
+    try:
+        # 使會話無效
+        token = credentials.credentials
+        
+        # 先檢查 token 是否有效
+        if not db_manager.is_session_valid(token):
+            return {"message": "會話已過期或不存在"}
+        
+        # 撤銷 token
+        if db_manager.invalidate_session(token):
+            logger.info(f"使用者登出成功，token: {token[:20]}...")
+            return {"message": "登出成功！"}
+        else:
+            logger.warning(f"登出時 token 無效: {token[:20]}...")
+            return {"message": "會話已過期或不存在"}
+            
+    except Exception as e:
+        logger.error(f"登出失敗: {e}")
+        # 即使失敗也要嘗試撤銷 token
+        try:
+            token = credentials.credentials
+            db_manager.invalidate_session(token)
+        except:
+            pass
+        return {"message": "登出成功！"}  # 即使失敗也回傳成功，避免前端錯誤
 
 @app.post("/llmchat", response_model=LLMChatResponse)
-# TODO: 需要驗證 token
-# username: str = Depends(verify_token),
 async def chat_with_llm(
-    request: LLMChatRequest,      
+    request: LLMChatRequest,
+    username: str = Depends(verify_token),      
     api_key: str = Depends(get_api_key)
 ):
     """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 2000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
@@ -568,11 +690,10 @@ async def chat_with_llm(
 
 # 3. 模組一：國王的厭食症 (Generative AI)
 
-# TODO: 需要驗證 token
-# username: str = Depends(verify_token),
 @app.post("/module1/generate-recipe-text", response_model=GenerateRecipeTextResponse)
 async def generate_recipe_text(
     request: GenerateRecipeTextRequest,
+    username: str = Depends(verify_token),
     api_key: str = Depends(get_api_key)
 ):
     """根據玩家輸入的提示詞 (Prompt)，生成菜色的文字描述。"""
@@ -640,6 +761,7 @@ async def generate_recipe_text(
 async def generate_custom_image(
     request: GenerateCustomImageRequest,
     http_request: Request,
+    username: str = Depends(verify_token),
     client: OpenAI = Depends(get_openai_client)
 ):
     """完全客製化圖片生成，使用 DALL-E 3 模型"""
@@ -669,7 +791,7 @@ async def generate_custom_image(
         local_image_url = f"{base_url}/static/images/{filename}"
         
         # 記錄生成時間
-        generation_time = datetime.now()
+        generation_time = datetime.now(timezone.utc)
         
         return GenerateCustomImageResponse(
             image_url=local_image_url,
@@ -713,12 +835,11 @@ async def generate_custom_image(
             )
 
 
-# TODO: 需要驗證 token
-# username: str = Depends(verify_token),
 @app.post("/module1/generate-recipe-image", response_model=GenerateRecipeImageResponse)
 async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
     http_request: Request,
+    username: str = Depends(verify_token),
     client: OpenAI = Depends(get_openai_client)
 ):
     """將食譜文字描述傳給後端，生成對應的菜色圖片。"""
@@ -751,7 +872,7 @@ async def generate_recipe_image(
         local_image_url = f"{base_url}/static/images/{filename}"
         
         # 記錄生成時間
-        generation_time = datetime.now()
+        generation_time = datetime.now(timezone.utc)
         
         return GenerateRecipeImageResponse(
             image_url=local_image_url,
@@ -798,6 +919,7 @@ async def generate_recipe_image(
 @app.post("/module1/analyze-food-image", response_model=FoodImageAnalysisResponse)
 async def analyze_food_image(
     request: FoodImageAnalysisRequest,
+    username: str = Depends(verify_token)
 ):
     """使用 Gemini 分析食物圖片並給出評語"""
     try:
@@ -911,8 +1033,19 @@ ANALYSIS:
 
 # 2. 模組二：池塘裡面銀龍魚和吳郭魚的辨識
 @app.post("/module2/train/{user_name}")
-async def train_user_model(user_name: str, request: TrainingRequest):
+async def train_user_model(
+    user_name: str, 
+    request: TrainingRequest,
+    current_user: str = Depends(verify_token)
+):
     """訓練玩家的模型，回傳訓練結果"""
+    # 驗證使用者只能訓練自己的模型
+    if user_name != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只能訓練自己的模型"
+        )
+    
     if GLOBAL_MOBILENET is None:
         return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
 
@@ -937,8 +1070,19 @@ async def train_user_model(user_name: str, request: TrainingRequest):
     return result
 
 @app.post("/module2/predict/{user_name}")
-async def predict_with_user_model(user_name: str, request: PredictionRequest):
+async def predict_with_user_model(
+    user_name: str, 
+    request: PredictionRequest,
+    current_user: str = Depends(verify_token)
+):
     """使用玩家的模型預測魚的種類，回傳預測結果"""
+    # 驗證使用者只能使用自己的模型
+    if user_name != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只能使用自己的模型"
+        )
+    
     if GLOBAL_MOBILENET is None:
         return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
 
@@ -1480,6 +1624,34 @@ async def get_system_prompts():
     return {
         "prompts": system_prompts
     }
+
+@app.get("/users/{username}/statistics")
+async def get_user_statistics(username: str, current_user: str = Depends(verify_token)):
+    """獲取使用者統計資訊（需要登入）"""
+    try:
+        # 檢查是否為當前使用者或管理員
+        if username != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只能查看自己的統計資訊"
+            )
+        
+        user = db_manager.get_user_by_username(username)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="使用者不存在"
+            )
+        
+        statistics = db_manager.get_user_statistics(user["id"])
+        return SuccessResponse(data=statistics)
+        
+    except Exception as e:
+        logger.error(f"獲取使用者統計資訊失敗: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="獲取統計資訊失敗"
+        )
 
 @app.get("/models")
 async def list_models():

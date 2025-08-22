@@ -2,7 +2,8 @@ services:
   - type: web
     name: AI Odyssey Backend
     runtime: python
-    plan: free
+    plan: starter
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    region: singapore
+    startCommand: python init_database.py && python migrate_users.py && python main.py

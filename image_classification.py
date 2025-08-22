@@ -44,8 +44,8 @@ class ImageClassificationModel:
         self.MOBILE_NET_INPUT_WIDTH = 224
         self.MOBILE_NET_INPUT_HEIGHT = 224
         self.COLOR_CHANNEL = 3
-        self.EPOCHS_NUM = 20
-        self.BATCH_SIZE = 5
+        self.EPOCHS_NUM = 10
+        self.BATCH_SIZE = 10
         
         # 模型組件
         # `mobilenet` 現在從外部傳入，是全域共享的
@@ -168,18 +168,23 @@ class ImageClassificationModel:
         
         Args:
             data_config: 數據配置，格式如下：
-            {
-                "train_dataset": [
-                    {
-                        "name": "吳郭魚",
-                        "images": ["/吳郭魚/1.jpg", "/吳郭魚/2.jpg"]
-                    },
-                    {
-                        "name": "銀龍魚", 
-                        "images": ["/銀龍魚/1.jpg", "/銀龍魚/2.jpg"]
-                    }
-                ]
-            }
+{"train_dataset": [
+        {
+			"name": "銀龍魚",
+			"images": [
+				"/銀龍魚/1.jpg",
+				"/銀龍魚/2.jpg",
+			]
+		},
+		{
+			"name": "吳郭魚",
+			"images": [
+				"/吳郭魚/1.jpg",
+				"/吳郭魚/2.jpg",
+			]
+		}
+	]}
+
             
         Returns:
             bool: 是否成功載入
@@ -361,10 +366,10 @@ class ImageClassificationModel:
 
             return {
                 "success": True,
-                "final_accuracy": final_acc,
-                "final_loss": final_loss,
                 "val_accuracy": val_acc,
                 "val_loss": val_loss,
+                "final_accuracy": final_acc,
+                "final_loss": final_loss,
                 "model_path": str(model_path),
                 "class_names": self.class_names,
                 "num_train_samples": int(len(X)),
