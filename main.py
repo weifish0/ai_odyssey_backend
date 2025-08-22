@@ -19,6 +19,9 @@ from fastapi.staticfiles import StaticFiles
 import json
 from google import genai
 from fastapi.encoders import jsonable_encoder
+from contextlib import asynccontextmanager
+import tensorflow as tf
+from image_recognition import ImageRecognitionModel
 
 # 載入環境變數
 load_dotenv()
@@ -27,10 +30,44 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- 影像辨識 ---
+# 1. 用於存放預先載入的 MobileNet 基礎模型
+GLOBAL_MOBILENET = None
+# 2. 用於緩存不同用戶的已訓練模型，避免重複從硬碟讀取
+USER_MODELS = {} 
+
+# --- API 生命週期事件 ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 在應用程式啟動時執行的程式碼
+    global GLOBAL_MOBILENET
+    logger.info("伺服器啟動，開始載入 MobileNet V3 基礎模型...")
+    try:
+        GLOBAL_MOBILENET = tf.keras.applications.MobileNetV3Small(
+            input_shape=(224, 224, 3),
+            include_top=False,
+            weights='imagenet',
+            pooling='avg'
+        )
+        GLOBAL_MOBILENET.trainable = False
+        # 預熱模型
+        dummy_input = tf.zeros((1, 224, 224, 3))
+        _ = GLOBAL_MOBILENET(dummy_input)
+        logger.info("✅ MobileNet V3 基礎模型載入成功並已設定為全域共用！")
+    except Exception as e:
+        logger.error(f"❌ 載入 MobileNet 基礎模型失敗: {e}")
+        GLOBAL_MOBILENET = None
+    
+    yield
+    
+    # 在應用程式關閉時執行的程式碼 (可選)
+    logger.info("伺服器正在關閉...")
+
 app = FastAPI(
     title="AI Odyssey Backend API",
     description="AI 學習遊戲平台後端 API",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # 設定 CORS
@@ -49,14 +86,20 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # 模擬資料庫 (實際應用中應該使用真實資料庫)
-users_db = {}
-fish_images_db = [
-    {"image_id": "img_fish_001", "url": "https://cdn.your-game.com/fishes/fish_a.png"},
-    {"image_id": "img_fish_002", "url": "https://cdn.your-game.com/fishes/fish_b.png"},
-    {"image_id": "img_fish_003", "url": "https://cdn.your-game.com/fishes/fish_c.png"},
-    {"image_id": "img_fish_004", "url": "https://cdn.your-game.com/fishes/fish_d.png"},
-    {"image_id": "img_fish_005", "url": "https://cdn.your-game.com/fishes/fish_e.png"},
-]
+users_db = {
+    "will":   {
+        "id": "123456789",
+        "username": "will",
+        "hashed_password": "mypassword",
+        "money": 300000
+    },
+    "9n":{
+        "id": "999999999",
+        "username": "9n",
+        "hashed_password": "9nhaha1234",
+        "money": 300000
+    }
+}
 
 # NCHC API 設定
 NCHC_API_BASE_URL = "https://portal.genai.nchc.org.tw/api/v1"
@@ -127,29 +170,8 @@ class LLMChatRequest(BaseModel):
 class LLMChatResponse(BaseModel):
     answer: str = Field(..., example="嘿，探險家！影像辨識就像是讓電腦學會『看』東西的超能力！就像你教小朋友認識動物一樣，我們教電腦認識圖片中的內容。想像一下，如果電腦能認出照片裡是一隻貓、一朵花，或者一個蘋果，那不是很酷嗎？🤖✨")
 
-class ImageLabel(BaseModel):
-    image_id: str = Field(..., example="img_fish_001", description="圖片 ID")
-    classification: str = Field(..., example="arowana", description="分類結果")
 
-class SubmitLabelsRequest(BaseModel):
-    labels: List[ImageLabel] = Field(..., example=[
-        {"image_id": "img_fish_001", "classification": "arowana"},
-        {"image_id": "img_fish_002", "classification": "tilapia"},
-        {"image_id": "img_fish_003", "classification": "arowana"}
-    ], description="標註結果列表")
-
-class SubmitLabelsResponse(BaseModel):
-    message: str = Field(..., example="魔法魚鉤學習完成！它現在能更好地分辨魚了！")
-    accuracy: float = Field(..., example=0.95, description="訓練準確率，範圍 0.8-0.98")
-
-class IdentifyFishResponse(BaseModel):
-    fish_type: str = Field(..., example="arowana", description="魚類類型：arowana(銀龍魚) 或 tilapia(吳郭魚)")
-    image_url: str = Field(..., example="https://cdn.your-game.com/fishes/arowana_1.png")
-    decision: str = Field(..., example="keep", description="決定：keep(保留) 或 release(放生)")
-    value_gained: int = Field(..., example=1000, description="獲得的價值")
-    message: str = Field(..., example="是銀龍魚！AI 魔法魚鉤決定留下牠！")
-
-# Pydantic 模型 - 模組三：國王的厭食症
+# Pydantic 模型 - 模組一：國王的厭食症
 class GenerateRecipeTextRequest(BaseModel):
     prompt: str = Field(..., description="食譜生成提示詞")
 
@@ -208,9 +230,19 @@ class FoodImageAnalysisResponse(BaseModel):
     full_response_text: str = Field(..., description="Gemini 的完整回應文字")
 
 
-# Pydantic 模型 - AI English Writing Teacher 專案
+# Pydantic 模型 - 模組二：池塘裡面銀龍魚和吳郭魚的辨識
+class ImageInfo(BaseModel):
+    name: str
+    images: List[str]
 
-# 圖片辨識相關
+class TrainingRequest(BaseModel):
+    train_dataset: List[ImageInfo]
+    
+class PredictionRequest(BaseModel):
+    image_path: str = Field(..., description="要進行預測的圖片在伺服器上的相對路徑")
+
+
+# Pydantic 模型 - AI English Writing Teacher 專案
 class ImageData(BaseModel):
     data: str = Field(..., description="base64編碼的圖片數據")
     mimeType: str = Field(..., description="圖片MIME類型")
@@ -795,7 +827,7 @@ ANALYSIS:
 [請以嚴格廚師的角度，詳細評語(不要超過150字，不要條列式回答，不要使用markdown格式語法如"**")，包括：
 1. 食物名稱和類型識別
 2. 外觀、顏色、擺盤的專業評估
-3. 營養搭配和食材選擇分析
+3. 食材選擇分析
 4. 與顧客期待的對比分析
 5. 改進建議和專業點評]
 
@@ -877,58 +909,54 @@ ANALYSIS:
         )
 
 
-# 2. 模組二：魔法魚鉤 (Generative AI)
-@app.get("/module2/training-images", response_model=SuccessResponse)
-async def get_training_images(username: str = Depends(verify_token)):
-    """獲取待分類的魚類圖片"""
-    # 隨機選擇 3-5 張圖片
-    num_images = random.randint(3, 5)
-    selected_images = random.sample(fish_images_db, min(num_images, len(fish_images_db)))
-    
-    return SuccessResponse(data={
-        "images": selected_images
-    })
+# 2. 模組二：池塘裡面銀龍魚和吳郭魚的辨識
+@app.post("/module2/train/{user_id}")
+async def train_user_model(user_id: str, request: TrainingRequest):
+    """訓練玩家的模型，回傳訓練結果"""
+    if GLOBAL_MOBILENET is None:
+        return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
 
-
-@app.post("/module2/submit-labels", response_model=SubmitLabelsResponse)
-async def submit_labels(
-    request: SubmitLabelsRequest,
-    username: str = Depends(verify_token)
-):
-    """提交標註結果"""
-    # 模擬訓練準確率 (80-98%)
-    accuracy = random.uniform(0.8, 0.98)
+    # 1. 為此使用者取得或創建一個模型管理器實例
+    #    這裡使用快取 USER_MODELS 來避免重複創建對象
+    if user_id not in USER_MODELS:
+        USER_MODELS[user_id] = ImageRecognitionModel(user_id=user_id, base_model=GLOBAL_MOBILENET)
     
-    return SubmitLabelsResponse(
-        message="魔法魚鉤學習完成！它現在能更好地分辨魚了！",
-        accuracy=round(accuracy, 2)
-    )
-
-@app.post("/module2/identify-fish", response_model=IdentifyFishResponse)
-async def identify_fish(username: str = Depends(verify_token)):
-    """進行 AI 辨識"""
-    # 隨機決定釣到的魚類
-    fish_types = ["arowana", "tilapia"]
-    fish_type = random.choice(fish_types)
+    model_manager = USER_MODELS[user_id]
     
-    if fish_type == "arowana":
-        # 銀龍魚 - 保留
-        return IdentifyFishResponse(
-            fish_type="arowana",
-            image_url="https://cdn.your-game.com/fishes/arowana_1.png",
-            decision="keep",
-            value_gained=1000,
-            message="是銀龍魚！AI 魔法魚鉤決定留下牠！"
-        )
-    else:
-        # 吳郭魚 - 放生
-        return IdentifyFishResponse(
-            fish_type="tilapia",
-            image_url="https://cdn.your-game.com/fishes/tilapia_1.png",
-            decision="release",
-            value_gained=0,
-            message="是吳郭魚！AI 魔法魚鉤將牠放回去了。"
-        )     
+    # 2. 載入訓練數據
+    data_config = request.model_dump()
+    if not model_manager.load_training_data(data_config):
+        return {"success": False, "error": "載入訓練數據失敗，請檢查圖片路徑。"}
+        
+    # 3. 執行訓練
+    result = await model_manager.train_model()
+    
+    # 訓練完成後，更新快取中的模型狀態
+    USER_MODELS[user_id] = model_manager
+    
+    return result
+
+@app.post("/module2/predict/{user_id}")
+async def predict_with_user_model(user_id: str, request: PredictionRequest):
+    """使用玩家的模型預測魚的種類，回傳預測結果"""
+    if GLOBAL_MOBILENET is None:
+        return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
+
+    # 1. 取得此使用者的模型管理器
+    #    如果不在快取中，就創建一個新的。__init__ 會自動嘗試從硬碟載入已保存的模型
+    if user_id not in USER_MODELS:
+        USER_MODELS[user_id] = ImageRecognitionModel(user_id=user_id, base_model=GLOBAL_MOBILENET)
+
+    model_manager = USER_MODELS[user_id]
+
+    # 2. 檢查模型是否已訓練
+    if not model_manager.is_trained:
+        return {"success": False, "error": f"使用者 {user_id} 的模型尚未訓練，請先調用訓練 API。"}
+    
+    # 3. 執行預測
+    prediction = model_manager.predict_image(request.image_path)
+    return prediction
+   
 
 # ============================================================================
 # AI English Writing Teacher 專案 API 端點

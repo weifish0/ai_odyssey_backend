@@ -55,3 +55,6 @@ Thumbs.db
 
 static/*
 !static/.gitkeep
+
+models/*
+!models/.gitkeep

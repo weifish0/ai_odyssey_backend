@@ -11,3 +11,6 @@ aiofiles
 google-genai
 numpy
 scikit-learn
+tensorflow
+opencv-python
+pillow
