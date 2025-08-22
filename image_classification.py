@@ -19,32 +19,32 @@ try:
 except Exception:
     pass
 
-class ImageRecognitionModel:
+class ImageClassificationModel:
     """影像辨識模型類別，使用 MobileNet 進行遷移學習"""
     
     # 修改 __init__
-    def __init__(self, user_id: str, base_model: tf.keras.Model, model_base_path: str = "models"):
+    def __init__(self, user_name: str, base_model: tf.keras.Model, model_base_path: str = "models"):
         """
         初始化影像辨識模型
         
         Args:
-            user_id: 使用者唯一標識符
+            user_name: 使用者名稱
             base_model: 全域共用的預訓練基礎模型 (MobileNet)
             model_base_path: 所有模型保存的根路徑
         """
         if base_model is None:
             raise ValueError("必須提供一個已載入的 base_model (MobileNet)！")
             
-        self.user_id = user_id
-        # 每個使用者的模型都保存在以其 user_id 命名的子目錄中
-        self.model_save_path = Path(model_base_path) / self.user_id
+        self.user_name = user_name
+        # 每個使用者的模型都保存在以其 user_name 命名的子目錄中
+        self.model_save_path = Path(model_base_path) / self.user_name
         self.model_save_path.mkdir(parents=True, exist_ok=True)
         
         # 模型參數 (與之前相同)
         self.MOBILE_NET_INPUT_WIDTH = 224
         self.MOBILE_NET_INPUT_HEIGHT = 224
         self.COLOR_CHANNEL = 3
-        self.EPOCHS_NUM = 10
+        self.EPOCHS_NUM = 20
         self.BATCH_SIZE = 5
         
         # 模型組件
@@ -516,7 +516,7 @@ class ImageRecognitionModel:
             class_names_path = self.model_save_path / "class_names.json"
             
             if not model_path.exists() or not class_names_path.exists():
-                logger.warning(f"使用者 {self.user_id} 尚未訓練過模型，或模型文件不存在。")
+                logger.warning(f"使用者 {self.user_name} 尚未訓練過模型，或模型文件不存在。")
                 return False
             
             # 載入分類器模型
@@ -527,11 +527,11 @@ class ImageRecognitionModel:
                 self.class_names = json.load(f)
             
             self.is_trained = True
-            logger.info(f"✅ 成功載入使用者 {self.user_id} 的已保存模型！")
+            logger.info(f"✅ 成功載入使用者 {self.user_name} 的已保存模型！")
             return True
             
         except Exception as e:
-            logger.error(f"載入使用者 {self.user_id} 的模型失敗: {e}")
+            logger.error(f"載入使用者 {self.user_name} 的模型失敗: {e}")
             return False
     
     def get_model_info(self) -> Dict[str, Any]:
@@ -568,7 +568,7 @@ async def initialize_image_recognition_model():
     global image_recognition_model
     
     try:
-        image_recognition_model = ImageRecognitionModel()
+        image_recognition_model = ImageClassificationModel()
         
         # 載入 MobileNet
         success = await image_recognition_model.load_mobilenet()

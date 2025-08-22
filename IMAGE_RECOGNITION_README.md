@@ -127,13 +127,17 @@ success = model.create_classifier_model(2)
 載入訓練數據
 ```python
 data_config = {
-    "classes": [
-        {
-            "name": "class1",
-            "images": ["path/to/img1.jpg", "path/to/img2.jpg"]
+            "train_dataset": [
+                {
+                    "name": "吳郭魚",
+                    "images": ["/吳郭魚/1.jpg", "/吳郭魚/2.jpg","/吳郭魚/3.jpg","/吳郭魚/4.jpg","/吳郭魚/5.jpg","/吳郭魚/6.jpg","/吳郭魚/7.jpg","/吳郭魚/8.jpg","/吳郭魚/9.jpg","/吳郭魚/10.jpg"]
+                },
+                {
+                    "name": "銀龍魚", 
+                    "images": ["/銀龍魚/1.jpg", "/銀龍魚/2.jpg","/銀龍魚/3.jpg","/銀龍魚/4.jpg","/銀龍魚/5.jpg","/銀龍魚/6.jpg","/銀龍魚/7.jpg","/銀龍魚/8.jpg","/銀龍魚/9.jpg","/銀龍魚/10.jpg"]
+                }
+            ]
         }
-    ]
-}
 success = model.load_training_data(data_config)
 ```
 

@@ -21,7 +21,7 @@ from google import genai
 from fastapi.encoders import jsonable_encoder
 from contextlib import asynccontextmanager
 import tensorflow as tf
-from image_recognition import ImageRecognitionModel
+from image_classification import ImageClassificationModel
 
 # 載入環境變數
 load_dotenv()
@@ -910,18 +910,18 @@ ANALYSIS:
 
 
 # 2. 模組二：池塘裡面銀龍魚和吳郭魚的辨識
-@app.post("/module2/train/{user_id}")
-async def train_user_model(user_id: str, request: TrainingRequest):
+@app.post("/module2/train/{user_name}")
+async def train_user_model(user_name: str, request: TrainingRequest):
     """訓練玩家的模型，回傳訓練結果"""
     if GLOBAL_MOBILENET is None:
         return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
 
     # 1. 為此使用者取得或創建一個模型管理器實例
     #    這裡使用快取 USER_MODELS 來避免重複創建對象
-    if user_id not in USER_MODELS:
-        USER_MODELS[user_id] = ImageRecognitionModel(user_id=user_id, base_model=GLOBAL_MOBILENET)
+    if user_name not in USER_MODELS:
+        USER_MODELS[user_name] = ImageClassificationModel(user_name=user_name, base_model=GLOBAL_MOBILENET)
     
-    model_manager = USER_MODELS[user_id]
+    model_manager = USER_MODELS[user_name]
     
     # 2. 載入訓練數據
     data_config = request.model_dump()
@@ -932,26 +932,26 @@ async def train_user_model(user_id: str, request: TrainingRequest):
     result = await model_manager.train_model()
     
     # 訓練完成後，更新快取中的模型狀態
-    USER_MODELS[user_id] = model_manager
+    USER_MODELS[user_name] = model_manager
     
     return result
 
-@app.post("/module2/predict/{user_id}")
-async def predict_with_user_model(user_id: str, request: PredictionRequest):
+@app.post("/module2/predict/{user_name}")
+async def predict_with_user_model(user_name: str, request: PredictionRequest):
     """使用玩家的模型預測魚的種類，回傳預測結果"""
     if GLOBAL_MOBILENET is None:
         return {"success": False, "error": "基礎模型尚未準備就緒，請稍後再試。"}
 
     # 1. 取得此使用者的模型管理器
     #    如果不在快取中，就創建一個新的。__init__ 會自動嘗試從硬碟載入已保存的模型
-    if user_id not in USER_MODELS:
-        USER_MODELS[user_id] = ImageRecognitionModel(user_id=user_id, base_model=GLOBAL_MOBILENET)
+    if user_name not in USER_MODELS:
+        USER_MODELS[user_name] = ImageClassificationModel(user_name=user_name, base_model=GLOBAL_MOBILENET)
 
-    model_manager = USER_MODELS[user_id]
+    model_manager = USER_MODELS[user_name]
 
     # 2. 檢查模型是否已訓練
     if not model_manager.is_trained:
-        return {"success": False, "error": f"使用者 {user_id} 的模型尚未訓練，請先調用訓練 API。"}
+        return {"success": False, "error": f"使用者 {user_name} 的模型尚未訓練，請先調用訓練 API。"}
     
     # 3. 執行預測
     prediction = model_manager.predict_image(request.image_path)
