@@ -26,6 +26,10 @@ from image_classification import ImageClassificationModel
 # 載入環境變數
 load_dotenv()
 
+# 強制 TensorFlow 使用 CPU，避免 CUDA 錯誤
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 減少 TensorFlow 警告訊息
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,6 +45,27 @@ USER_MODELS = {}
 async def lifespan(app: FastAPI):
     # 在應用程式啟動時執行的程式碼
     global GLOBAL_MOBILENET
+    
+    # 配置 TensorFlow 以減少警告和錯誤
+    logger.info("正在配置 TensorFlow 環境...")
+    try:
+        # 設定 TensorFlow 日誌級別
+        tf.get_logger().setLevel('ERROR')
+        tf.autograph.set_verbosity(0)
+        
+        # 檢查可用的設備
+        devices = tf.config.list_physical_devices()
+        logger.info(f"可用的 TensorFlow 設備: {[device.device_type for device in devices]}")
+        
+        # 如果有 GPU 但想要強制使用 CPU
+        if tf.config.list_physical_devices('GPU'):
+            logger.info("檢測到 GPU，但強制使用 CPU 模式")
+            tf.config.set_visible_devices([], 'GPU')
+        
+        logger.info("✅ TensorFlow 環境配置完成")
+    except Exception as e:
+        logger.warning(f"TensorFlow 環境配置警告: {e}")
+    
     logger.info("伺服器啟動，開始載入 MobileNet V3 基礎模型...")
     try:
         GLOBAL_MOBILENET = tf.keras.applications.MobileNetV3Small(
@@ -764,7 +789,7 @@ async def generate_custom_image(
     username: str = Depends(verify_token),
     client: OpenAI = Depends(get_openai_client)
 ):
-    """完全客製化圖片生成，使用 DALL-E 3 模型"""
+    """完全客製化圖片生成，使用 dall-e-3 模型"""
     try:      
         # 使用 DALL-E 生成圖片
         response = client.images.generate(
@@ -845,7 +870,7 @@ async def generate_recipe_image(
     """將食譜文字描述傳給後端，生成對應的菜色圖片。"""
     try:
         # 優化提示詞，增加安全性和具體性
-        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality, professional food image."
+        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality food image."
         
         # 使用 DALL-E 生成圖片
         response = client.images.generate(
@@ -939,7 +964,7 @@ async def analyze_food_image(
         from google.genai import types
         
         # 動態生成 prompt，讓 AI 以嚴格餐廳廚師的身份來評分
-        chef_prompt = f"""你是一位經驗豐富、要求嚴格的米其林星級餐廳主廚。請以專業廚師的眼光，嚴格分析這張食物圖片。
+        chef_prompt = f"""你是一位經驗豐富、要求嚴格的餐廳主廚。請以專業廚師的眼光，嚴格分析這張食物圖片。
 對食物的期待：{request.dish_expect}
 請按照以下固定格式回覆：
 SCORE: [0-100分]
