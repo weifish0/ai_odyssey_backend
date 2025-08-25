@@ -123,6 +123,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 300
 # 導入 SQLite 資料庫管理器
 from database import db_manager
 
+# 導入 RAG 查詢引擎
+from query_engine import load_vector_database, search
+
 # 初始化資料庫（在應用程式啟動時會自動創建表格）
 logger.info("正在初始化 SQLite 資料庫...")
 
@@ -1690,6 +1693,101 @@ async def list_models():
             "gemini-embedding-001"
         ]
     }
+
+# RAG 查詢相關的 Pydantic 模型
+class RAGQueryRequest(BaseModel):
+    query: str = Field(..., description="查詢問題")
+    top_k: int = Field(default=5, description="回傳結果數量", ge=1, le=20)
+
+class RAGQueryResponse(BaseModel):
+    success: bool = Field(..., description="查詢是否成功")
+    results: List[Dict[str, Any]] = Field(..., description="查詢結果")
+    total_results: int = Field(..., description="總結果數量")
+    query: str = Field(..., description="原始查詢")
+
+@app.post("/rag/query-text1", response_model=RAGQueryResponse)
+async def query_rag_text1(
+    request: RAGQueryRequest,
+    username: str = Depends(verify_token)
+):
+    """查詢 rag_text1.txt 的向量資料庫"""
+    try:
+        # 載入向量資料庫
+        vector_db = load_vector_database("vector_database_1.pkl")
+        
+        if not vector_db:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="無法載入 rag_text1.txt 的向量資料庫，請先執行 build_rag_db.py 建立資料庫"
+            )
+        
+        # 執行搜尋
+        search_results = search(request.query, vector_db, top_k=request.top_k)
+        
+        # 格式化結果
+        formatted_results = []
+        for i, result in enumerate(search_results):
+            formatted_results.append({
+                "rank": i + 1,
+                "score": float(result["score"]),
+                "text": result["text"]
+            })
+        
+        return RAGQueryResponse(
+            success=True,
+            results=formatted_results,
+            total_results=len(formatted_results),
+            query=request.query
+        )
+        
+    except Exception as e:
+        logger.error(f"RAG 查詢 rag_text1.txt 失敗: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"RAG 查詢失敗: {str(e)}"
+        )
+
+@app.post("/rag/query-text2", response_model=RAGQueryResponse)
+async def query_rag_text2(
+    request: RAGQueryRequest,
+    username: str = Depends(verify_token)
+):
+    """查詢 rag_text2.txt 的向量資料庫"""
+    try:
+        # 載入向量資料庫
+        vector_db = load_vector_database("vector_database_2.pkl")
+        
+        if not vector_db:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="無法載入 rag_text2.txt 的向量資料庫，請先執行 build_rag_db.py 建立資料庫"
+            )
+        
+        # 執行搜尋
+        search_results = search(request.query, vector_db, top_k=request.top_k)
+        
+        # 格式化結果
+        formatted_results = []
+        for i, result in enumerate(search_results):
+            formatted_results.append({
+                "rank": i + 1,
+                "score": float(result["score"]),
+                "text": result["text"]
+            })
+        
+        return RAGQueryResponse(
+            success=True,
+            results=formatted_results,
+            total_results=len(formatted_results),
+            query=request.query
+        )
+        
+    except Exception as e:
+        logger.error(f"RAG 查詢 rag_text2.txt 失敗: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"RAG 查詢失敗: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

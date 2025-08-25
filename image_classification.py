@@ -43,7 +43,7 @@ class ImageClassificationModel:
         self.MOBILE_NET_INPUT_WIDTH = 224
         self.MOBILE_NET_INPUT_HEIGHT = 224
         self.COLOR_CHANNEL = 3
-        self.EPOCHS_NUM = 30  # 增加訓練輪數，配合早停機制
+        self.EPOCHS_NUM = 20  # 增加訓練輪數，配合早停機制
         self.BATCH_SIZE = 6   # 適當增加批次大小
         self.PATIENCE = 10    # 早停耐心值
         

@@ -2,6 +2,7 @@ import json
 import numpy as np
 import os
 import pickle  # 我們將使用 pickle 來儲存 Python 物件
+import re
 from dotenv import load_dotenv
 from google import genai
 
@@ -10,10 +11,10 @@ load_dotenv()
 # --- 1. 設定 API 資訊與檔案路徑 ---
 GEMINI_API_KEY = os.getenv("EMBEDDING_MODEL_API_KEY")
 MODEL_NAME = "gemini-embedding-001"
-DB_FILE_PATH = "vector_database.pkl" # 儲存資料庫的檔案名稱
+DB_FILE_PATH = "vector_database" # 儲存資料庫的檔案名稱
 
 # --- 2. 準備你的長篇文章 ---
-def load_article_text(file_path="./rag_text.txt"):
+def load_article_text(file_path="./rag_text1.txt"):
     """從文件讀取長篇文章"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -27,13 +28,18 @@ def load_article_text(file_path="./rag_text.txt"):
         print(f"讀取文件時發生錯誤: {e}")
         return ""
 
-# 讀取文章
-long_article_text = load_article_text()
-
 # --- 3. 沿用之前的輔助函式 ---
 
-def chunk_text(text, chunk_size=2):
-    paragraphs = text.strip().split('\n\n')
+def chunk_text(text, chunk_size=1):
+    # 將字面上的 \n 轉為真正的換行，並標準化各系統換行符號
+    if "\\n" in text:
+        text = text.replace("\\n", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # 以 2 個以上的空行作為段落分隔，並去除空白段落
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n+', text.strip()) if p.strip()]
+
+    # 以 chunk_size 合併段落
     chunks = ['\n\n'.join(paragraphs[i:i + chunk_size]) for i in range(0, len(paragraphs), chunk_size)]
     print(f"成功將文章切分為 {len(chunks)} 個區塊。")
     return chunks
@@ -128,17 +134,22 @@ if __name__ == "__main__":
         print("警告：請設定 GEMINI_API_KEY 環境變數。")
         print("例如：export GEMINI_API_KEY='your-api-key-here'")
     else:
-        # 步驟 1: 分塊
-        article_chunks = chunk_text(long_article_text)
-        
-        # 步驟 2: 建立向量資料庫
-        vector_db = create_vector_database(article_chunks)
+        for article_num in range(2):
+            # 步驟 1: 讀取文章並分塊
+            article_text = load_article_text(file_path=f"./rag_text{article_num+1}.txt")
+            if article_text:
+                article_chunks = chunk_text(article_text)
+                
+                # 步驟 2: 建立向量資料庫
+                vector_db = create_vector_database(article_chunks)
 
-        # 步驟 3: 將資料庫儲存到檔案
-        if vector_db:
-            print(f"\n準備將資料庫儲存至 {DB_FILE_PATH}...")
-            with open(DB_FILE_PATH, "wb") as f:
-                pickle.dump(vector_db, f)
-            print("向量資料庫已成功建立並儲存！")
-        else:
-            print("建立向量資料庫失敗，未儲存任何檔案。")
+                # 步驟 3: 將資料庫儲存到檔案
+                if vector_db:
+                    print(f"\n準備將資料庫儲存至 {DB_FILE_PATH}_{article_num+1}...")
+                    with open(f"{DB_FILE_PATH}_{article_num+1}.pkl", "wb") as f:
+                        pickle.dump(vector_db, f)
+                    print("向量資料庫已成功建立並儲存！")
+                else:
+                    print("建立向量資料庫失敗，未儲存任何檔案。")
+            else:
+                print(f"無法讀取文章 {article_num+1}，跳過處理。")
