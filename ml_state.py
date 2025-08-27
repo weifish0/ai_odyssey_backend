@@ -1,12 +1,16 @@
 import logging
+import os
 import tensorflow as tf
+from threading import Lock, Semaphore
 
 logger = logging.getLogger(__name__)
 
 # 使用字典來管理全域狀態，避免模組間的全域變數引用問題
 _global_state = {
     "GLOBAL_MOBILENET": None,
-    "USER_MODELS": {}
+    "USER_MODELS": {},
+    "MOBILENET_LOCK": Lock(),
+    "MOBILENET_SEMAPHORE": None
 }
 
 
@@ -27,6 +31,9 @@ def init_mobilenet() -> bool:
         
         # 更新全域狀態
         _global_state["GLOBAL_MOBILENET"] = mobilenet
+        # 初始化信號量：限制同時執行 mobilenet.predict 的併發數
+        max_workers = max(2, (os.cpu_count() or 4) // 2)
+        _global_state["MOBILENET_SEMAPHORE"] = Semaphore(max_workers)
         
         logger.info("✅ MobileNet V3 基礎模型載入成功並已設定為全域共用！")
         return True
@@ -44,6 +51,16 @@ def is_mobilenet_ready() -> bool:
 def get_mobilenet():
     """取得 MobileNet 模型實例"""
     return _global_state["GLOBAL_MOBILENET"]
+
+
+def get_mobilenet_lock() -> Lock:
+    """取得用於序列化 MobileNet 操作的鎖"""
+    return _global_state["MOBILENET_LOCK"]
+
+
+def get_mobilenet_semaphore() -> Semaphore:
+    """取得限制 MobileNet 併發的信號量"""
+    return _global_state["MOBILENET_SEMAPHORE"]
 
 
 def get_user_models():
@@ -71,6 +88,14 @@ class GlobalState:
     def USER_MODELS(self):
         return _global_state["USER_MODELS"]
 
+    @property
+    def MOBILENET_LOCK(self):
+        return _global_state["MOBILENET_LOCK"]
+
+    @property
+    def MOBILENET_SEMAPHORE(self):
+        return _global_state["MOBILENET_SEMAPHORE"]
+
 
 # 創建全域狀態實例
 _global_state_instance = GlobalState()
@@ -78,5 +103,7 @@ _global_state_instance = GlobalState()
 # 為了向後相容，提供動態的全域變數引用
 GLOBAL_MOBILENET = _global_state_instance.GLOBAL_MOBILENET
 USER_MODELS = _global_state_instance.USER_MODELS
+MOBILENET_LOCK = _global_state_instance.MOBILENET_LOCK
+MOBILENET_SEMAPHORE = _global_state_instance.MOBILENET_SEMAPHORE
 
 

@@ -10,7 +10,7 @@ load_dotenv()
 # --- 1. 設定 API 資訊與檔案路徑 ---
 GEMINI_API_KEY = os.getenv("EMBEDDING_MODEL_API_KEY")
 MODEL_NAME = "gemini-embedding-001"
-DB_FILE_PATH = "vector_database_2.pkl" # 指定要載入的資料庫檔案
+DB_FILE_PATH = "vector_database_1.pkl" # 指定要載入的資料庫檔案
 
 # --- 2. 定義查詢相關函式 (與上個檔案相同) ---
 
