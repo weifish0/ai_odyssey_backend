@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>使用者分數看板</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial, sans-serif; margin: 24px; }
+    h1 { margin-bottom: 12px; }
+    .controls { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .sorts { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    input[type="text"], input[type="password"] { padding: 8px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f7f7f7; }
+    .error { color: #c00; margin: 8px 0; }
+    .ok { color: #090; margin: 8px 0; }
+  </style>
+  <script>
+    let token = null;
+    let currentSortKey = 'score_total';
+    let cachedUsers = [];
+
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      const err = document.getElementById('err');
+      err.textContent = '';
+      try {
+        const resp = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '登入失敗');
+        token = data.access_token;
+        err.textContent = '登入成功';
+        err.className = 'ok';
+        await loadScores();
+      } catch (e) {
+        err.textContent = e.message;
+        err.className = 'error';
+      }
+    }
+
+    async function loadScores() {
+      const err = document.getElementById('err');
+      try {
+        const resp = await fetch('/users', {
+          headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '讀取分數失敗');
+        cachedUsers = data.data || [];
+        renderTable();
+      } catch (e) {
+        err.textContent = e.message;
+        err.className = 'error';
+      }
+    }
+
+    function renderTable() {
+      const tbody = document.querySelector('#scoreboard tbody');
+      tbody.innerHTML = '';
+      const sorted = [...cachedUsers].sort((a, b) => (b[currentSortKey] ?? 0) - (a[currentSortKey] ?? 0));
+      sorted.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${u.username}</td>
+          <td>${u.score_level1}</td>
+          <td>${u.score_level2}</td>
+          <td>${u.score_level3}</td>
+          <td><b>${u.score_total}</b></td>
+        `;
+        tbody.appendChild(tr);
+      });
+      highlightActiveSort();
+    }
+
+    function setSort(key) {
+      currentSortKey = key;
+      renderTable();
+    }
+
+    function highlightActiveSort() {
+      const keys = ['score_level1','score_level2','score_level3','score_total'];
+      keys.forEach(k => {
+        const btn = document.getElementById('sort_' + k);
+        if (!btn) return;
+        btn.style.background = (k === currentSortKey) ? '#e3f2ff' : '';
+        btn.style.border = (k === currentSortKey) ? '1px solid #3399ff' : '1px solid #ccc';
+      });
+    }
+
+    function startAutoRefresh() {
+      loadScores();
+      setInterval(loadScores, 5000);
+    }
+  </script>
+</head>
+<body onload="startAutoRefresh()">
+  <h1>使用者分數看板</h1>
+  <div class="controls">
+    <input id="username" type="text" placeholder="帳號" />
+    <input id="password" type="password" placeholder="密碼" />
+    <button onclick="login()">登入並載入</button>
+    <button onclick="loadScores()">立即刷新</button>
+    <div class="sorts">
+      <span>排序：</span>
+      <button id="sort_score_level1" onclick="setSort('score_level1')">關卡1</button>
+      <button id="sort_score_level2" onclick="setSort('score_level2')">關卡2</button>
+      <button id="sort_score_level3" onclick="setSort('score_level3')">關卡3</button>
+      <button id="sort_score_total" onclick="setSort('score_total')">總分</button>
+    </div>
+  </div>
+  <div id="err"></div>
+  <table id="scoreboard">
+    <thead>
+      <tr>
+        <th>使用者</th>
+        <th>關卡 1</th>
+        <th>關卡 2</th>
+        <th>關卡 3</th>
+        <th>總分</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</body>
+</html>
+
+

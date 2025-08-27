@@ -55,6 +55,7 @@ Thumbs.db
 
 static/*
 !static/.gitkeep
+!static/scoreboard.html
 
 models/*
 !models/.gitkeep
