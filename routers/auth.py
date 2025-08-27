@@ -28,14 +28,12 @@ async def register(user_data: UserRegister):
         user = db_manager.create_user(
             username=user_data.username,
             password=user_data.password,
-            initial_money=0,
         )
         return {
             "message": "註冊成功！",
             "user": {
                 "id": user["id"],
                 "username": user["username"],
-                "money": user["money"],
             },
         }
     except ValueError as e:
@@ -71,7 +69,6 @@ async def login(user_data: UserLogin):
             "user": {
                 "id": user["id"],
                 "username": user["username"],
-                "money": user["money"],
             },
         }
     except ValueError as e:
@@ -100,7 +97,6 @@ async def get_current_user(username: str = Depends(verify_token)):
             "user": {
                 "id": user["id"],
                 "username": user["username"],
-                "money": user["money"],
                 "created_at": user["created_at"],
                 "last_login": user["last_login"],
             }

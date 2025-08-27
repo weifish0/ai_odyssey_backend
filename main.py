@@ -32,6 +32,7 @@ from routers import rag as rag_router
 from routers import ai_teacher as ai_teacher_router
 from routers import food_analysis as food_analysis_router
 from routers import users as users_router
+from routers import llm as llm_router
 
 # 載入環境變數
 load_dotenv()
@@ -159,12 +160,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # 掛載 Routers
 app.include_router(misc_router.router)
 app.include_router(auth_router.router)
+app.include_router(users_router.router)
 app.include_router(module1_router.router)
 app.include_router(module2_router.router)
+app.include_router(llm_router.router)
 app.include_router(rag_router.router)
-app.include_router(ai_teacher_router.router)
 app.include_router(food_analysis_router.router)
-app.include_router(users_router.router)
+app.include_router(ai_teacher_router.router)
 
 
 if __name__ == "__main__":

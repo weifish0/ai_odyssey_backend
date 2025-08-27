@@ -31,7 +31,7 @@ def _get_nchc_api_key() -> str:
 
 @router.post("/llmchat", response_model=LLMChatResponse)
 async def chat_with_llm(request: LLMChatRequest, username: str = Depends(verify_token), api_key: str = Depends(_get_nchc_api_key)):
-    """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 2000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的智識庫設定），使用question作為使用者問題"""
+    """與 LLM 進行對話，使用 gpt-oss-120b 模型，temp 0.4，max_tokens 2000，使用system_prompt作為系統提示詞（如果不填寫將使用預設的知識機器人設定），使用question作為使用者問題"""
     try:
         messages = [
             {"role": "system", "content": request.system_prompt},

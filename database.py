@@ -35,7 +35,11 @@ class DatabaseManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
                     hashed_password TEXT NOT NULL,
-                    money INTEGER DEFAULT 500,
+                    -- 分數欄位（v2 之後新增）
+                    score_level1 INTEGER DEFAULT 0,
+                    score_level2 INTEGER DEFAULT 0,
+                    score_level3 INTEGER DEFAULT 0,
+                    score_total  INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_login TIMESTAMP,
                     is_active BOOLEAN DEFAULT 1
@@ -83,6 +87,23 @@ class DatabaseManager:
                 ON token_blacklist(token)
             ''')
             
+            # 檢查並補齊缺少的欄位（針對舊版資料庫進行輕量遷移）
+            cursor.execute("PRAGMA table_info(users)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            required_cols = {
+                "score_level1": "ALTER TABLE users ADD COLUMN score_level1 INTEGER DEFAULT 0",
+                "score_level2": "ALTER TABLE users ADD COLUMN score_level2 INTEGER DEFAULT 0",
+                "score_level3": "ALTER TABLE users ADD COLUMN score_level3 INTEGER DEFAULT 0",
+                "score_total":  "ALTER TABLE users ADD COLUMN score_total  INTEGER DEFAULT 0",
+            }
+            for col, ddl in required_cols.items():
+                if col not in existing_cols:
+                    try:
+                        cursor.execute(ddl)
+                        logger.info(f"已新增缺少欄位: {col}")
+                    except Exception as e:
+                        logger.warning(f"新增欄位 {col} 失敗或已存在: {e}")
+
             conn.commit()
             logger.info("資料庫表格初始化完成")
             
@@ -93,7 +114,7 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
-    def create_user(self, username: str, password: str, initial_money: int = 500) -> Dict[str, Any]:
+    def create_user(self, username: str, password: str) -> Dict[str, Any]:
         """創建新使用者"""
         try:
             conn = self.get_connection()
@@ -109,9 +130,9 @@ class DatabaseManager:
             
             # 插入新使用者
             cursor.execute('''
-                INSERT INTO users (username, hashed_password, money, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (username, hashed_password.decode('utf-8'), initial_money, datetime.now(timezone.utc)))
+                INSERT INTO users (username, hashed_password, score_level1, score_level2, score_level3, score_total, created_at)
+                VALUES (?, ?, 0, 0, 0, 0, ?)
+            ''', (username, hashed_password.decode('utf-8'), datetime.now(timezone.utc)))
             
             user_id = cursor.lastrowid
             
@@ -128,7 +149,11 @@ class DatabaseManager:
             return {
                 "id": user_id,
                 "username": username,
-                "money": initial_money,
+                # 提供新舊欄位相容
+                "score_level1": 0,
+                "score_level2": 0,
+                "score_level3": 0,
+                "score_total": 0,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             
@@ -147,7 +172,9 @@ class DatabaseManager:
             
             # 查詢使用者
             cursor.execute('''
-                SELECT id, username, hashed_password, money, is_active
+                SELECT id, username, hashed_password,
+                       score_level1, score_level2, score_level3, score_total,
+                       is_active
                 FROM users WHERE username = ?
             ''', (username,))
             
@@ -174,10 +201,14 @@ class DatabaseManager:
                 
                 conn.commit()
                 
+                # 回傳時同樣提供相容欄位
                 return {
                     "id": user['id'],
                     "username": user['username'],
-                    "money": user['money']
+                    "score_level1": user["score_level1"],
+                    "score_level2": user["score_level2"],
+                    "score_level3": user["score_level3"],
+                    "score_total": user["score_total"],
                 }
             
             return None
@@ -196,7 +227,8 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, username, money, created_at, last_login, is_active
+                SELECT id, username, score_level1, score_level2, score_level3, score_total,
+                       created_at, last_login, is_active
                 FROM users WHERE id = ?
             ''', (user_id,))
             
@@ -205,7 +237,10 @@ class DatabaseManager:
                 return {
                     "id": user['id'],
                     "username": user['username'],
-                    "money": user['money'],
+                    "score_level1": user['score_level1'],
+                    "score_level2": user['score_level2'],
+                    "score_level3": user['score_level3'],
+                    "score_total": user['score_total'],
                     "created_at": user['created_at'],
                     "last_login": user['last_login'],
                     "is_active": bool(user['is_active'])
@@ -227,7 +262,8 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, username, money, created_at, last_login, is_active
+                SELECT id, username, score_level1, score_level2, score_level3, score_total,
+                       created_at, last_login, is_active
                 FROM users WHERE username = ?
             ''', (username,))
             
@@ -236,7 +272,10 @@ class DatabaseManager:
                 return {
                     "id": user['id'],
                     "username": user['username'],
-                    "money": user['money'],
+                    "score_level1": user['score_level1'],
+                    "score_level2": user['score_level2'],
+                    "score_level3": user['score_level3'],
+                    "score_total": user['score_total'],
                     "created_at": user['created_at'],
                     "last_login": user['last_login'],
                     "is_active": bool(user['is_active'])
@@ -251,31 +290,48 @@ class DatabaseManager:
             if conn:
                 conn.close()
     
-    def update_user_money(self, user_id: int, new_amount: int) -> bool:
-        """更新使用者金幣數量"""
+
+    def update_user_score(self, username: str, new_score: int, level: int | None = None) -> bool:
+        """更新使用者分數
+        - 若提供 level (1/2/3)，更新對應關卡分數並重算總分
+        - 否則更新總分 score_total
+        """
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            
+
+            # 取得使用者 id 與現有分數
+            cursor.execute('SELECT id, score_level1, score_level2, score_level3 FROM users WHERE username = ?', (username,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            user_id = row['id']
+
+            if level in (1, 2, 3):
+                col = f"score_level{level}"
+                cursor.execute(f'UPDATE users SET {col} = ? WHERE id = ?', (new_score, user_id))
+                # 重新讀取三關分數計算總分
+                l1 = new_score if level == 1 else row['score_level1']
+                l2 = new_score if level == 2 else row['score_level2']
+                l3 = new_score if level == 3 else row['score_level3']
+                total = int(l1) + int(l2) + int(l3)
+                cursor.execute('UPDATE users SET score_total = ? WHERE id = ?', (total, user_id))
+                activity_desc = f"關卡{level}分數更新為 {new_score}，總分 {total}"
+            else:
+                # 直接更新總分
+                cursor.execute('UPDATE users SET score_total = ? WHERE id = ?', (new_score, user_id))
+                activity_desc = f"總分更新為 {new_score}"
+
+            # 記錄活動
             cursor.execute('''
-                UPDATE users SET money = ? WHERE id = ?
-            ''', (new_amount, user_id))
-            
-            if cursor.rowcount > 0:
-                # 記錄活動
-                cursor.execute('''
-                    INSERT INTO user_activities (user_id, activity_type, description)
-                    VALUES (?, ?, ?)
-                ''', (user_id, "MONEY_UPDATE", f"金幣更新為 {new_amount}"))
-                
-                conn.commit()
-                logger.info(f"使用者 {user_id} 金幣更新為 {new_amount}")
-                return True
-            
-            return False
-            
+                INSERT INTO user_activities (user_id, activity_type, description)
+                VALUES (?, ?, ?)
+            ''', (user_id, "SCORE_UPDATE", activity_desc))
+
+            conn.commit()
+            return cursor.rowcount > 0
         except Exception as e:
-            logger.error(f"更新使用者金幣失敗: {e}")
+            logger.error(f"更新使用者分數失敗: {e}")
             raise
         finally:
             if conn:
@@ -469,7 +525,7 @@ class DatabaseManager:
             
             # 取得基本資訊
             cursor.execute('''
-                SELECT username, money, created_at, last_login
+                SELECT username, created_at, last_login
                 FROM users WHERE id = ?
             ''', (user_id,))
             
@@ -499,7 +555,6 @@ class DatabaseManager:
             
             return {
                 "username": user['username'],
-                "money": user['money'],
                 "created_at": user['created_at'],
                 "last_login": user['last_login'],
                 "activities": activities,
@@ -533,9 +588,9 @@ class DatabaseManager:
                 
                 # 創建新使用者
                 cursor.execute('''
-                    INSERT INTO users (username, hashed_password, money, created_at)
-                    VALUES (?, ?, ?, ?)
-                ''', (username, user_data['hashed_password'], user_data['money'], datetime.now(timezone.utc)))
+                    INSERT INTO users (username, hashed_password, created_at)
+                    VALUES (?, ?, ?)
+                ''', (username, user_data['hashed_password'], datetime.now(timezone.utc)))
                 
                 migrated_count += 1
                 logger.info(f"成功遷移使用者 {username}")
@@ -545,6 +600,39 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"遷移使用者失敗: {e}")
+            raise
+        finally:
+            if conn:
+                conn.close()
+
+    def get_all_users_with_scores(self) -> list[Dict[str, Any]]:
+        """取得所有使用者與分數資訊（用於分數看板）"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT id, username, score_level1, score_level2, score_level3, score_total, created_at, last_login
+                FROM users
+                ORDER BY score_total DESC, username ASC
+            ''')
+
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                result.append({
+                    "id": row["id"],
+                    "username": row["username"],
+                    "score_level1": row["score_level1"],
+                    "score_level2": row["score_level2"],
+                    "score_level3": row["score_level3"],
+                    "score_total": row["score_total"],
+                    "created_at": row["created_at"],
+                    "last_login": row["last_login"],
+                })
+            return result
+        except Exception as e:
+            logger.error(f"取得使用者分數清單失敗: {e}")
             raise
         finally:
             if conn:

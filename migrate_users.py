@@ -12,6 +12,7 @@ from database import db_manager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def migrate_existing_users():
     """遷移現有的模擬資料庫使用者"""
     
@@ -20,31 +21,37 @@ def migrate_existing_users():
         "will": {
             "id": "123456789",
             "username": "will",
-            "hashed_password": "mypassword",  # 這是明文密碼，需要加密
-            "money": 300000
+            # 你可以用 password_plain 或 hashed_password 放明文（將自動加密）
+            "hashed_password": "mypassword",
         },
         "9n": {
             "id": "999999999",
             "username": "9n",
-            "hashed_password": "9nhaha1234",  # 這是明文密碼，需要加密
-            "money": 300000
+            "hashed_password": "9nhaha1234",
         }
     }
     
     try:
         logger.info("開始遷移使用者資料...")
         
-        # 為每個使用者加密密碼並遷移
+        # 為每個使用者加密密碼並遷移（相容 password_plain 或未加密的 hashed_password）
         for username, user_data in existing_users.items():
             try:
-                # 加密密碼
-                hashed_password = bcrypt.hashpw(
-                    user_data['hashed_password'].encode('utf-8'), 
-                    bcrypt.gensalt()
-                )
-                
-                # 更新使用者資料
-                user_data['hashed_password'] = hashed_password.decode('utf-8')
+                raw_pw = user_data.get('password_plain') or user_data.get('hashed_password')
+                if raw_pw is None:
+                    raise ValueError("缺少 password_plain/hashed_password 欄位")
+
+                # 若不是 bcrypt 格式（$2 開頭），視為明文並加密
+                if not str(raw_pw).startswith("$2"):
+                    hashed_password = bcrypt.hashpw(
+                        str(raw_pw).encode('utf-8'),
+                        bcrypt.gensalt()
+                    ).decode('utf-8')
+                else:
+                    hashed_password = str(raw_pw)
+
+                # 更新為最終要寫入資料庫的雜湊
+                user_data['hashed_password'] = hashed_password
                 
                 logger.info(f"準備遷移使用者: {username}")
                 
@@ -70,29 +77,6 @@ def migrate_existing_users():
         logger.error(f"遷移過程發生錯誤: {e}")
         raise
 
-def create_test_user():
-    """創建測試使用者"""
-    try:
-        logger.info("創建測試使用者...")
-        
-        # 創建一個新的測試使用者
-        test_user = db_manager.create_user(
-            username="test_user",
-            password="test123",
-            initial_money=1000
-        )
-        
-        logger.info(f"✅ 測試使用者創建成功: {test_user}")
-        
-        # 驗證登入
-        verified_user = db_manager.verify_user("test_user", "test123")
-        if verified_user:
-            logger.info(f"✅ 測試使用者登入驗證成功: {verified_user}")
-        else:
-            logger.error("❌ 測試使用者登入驗證失敗")
-            
-    except Exception as e:
-        logger.error(f"創建測試使用者失敗: {e}")
 
 def show_database_status():
     """顯示資料庫狀態"""
@@ -128,6 +112,7 @@ def show_database_status():
     except Exception as e:
         logger.error(f"檢查資料庫狀態失敗: {e}")
 
+
 if __name__ == "__main__":
     try:
         logger.info("🚀 開始執行資料庫遷移...")
@@ -137,9 +122,6 @@ if __name__ == "__main__":
         
         # 遷移現有使用者
         migrate_existing_users()
-        
-        # 創建測試使用者
-        create_test_user()
         
         # 顯示最終狀態
         show_database_status()
