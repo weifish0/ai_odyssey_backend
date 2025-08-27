@@ -5,12 +5,81 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 
 from core.deps import verify_token
-from core.config import NCHC_API_BASE_URL
+from core.config import NCHC_API_BASE_URL, OPENAI_API_KEY, OPENAI_API_KEY2
 from core.utils import download_and_save_image
 
 import httpx
 from openai import OpenAI
 import asyncio
+
+
+def get_openai_client_with_fallback():
+    """獲取 OpenAI 客戶端，如果主要 API Key 不可用則使用備用的"""
+    try:
+        if OPENAI_API_KEY:
+            return OpenAI(api_key=OPENAI_API_KEY)
+        elif OPENAI_API_KEY2:
+            return OpenAI(api_key=OPENAI_API_KEY2)
+        else:
+            raise ValueError("沒有可用的 OpenAI API Key")
+    except Exception:
+        if OPENAI_API_KEY2:
+            return OpenAI(api_key=OPENAI_API_KEY2)
+        else:
+            raise ValueError("沒有可用的 OpenAI API Key")
+
+
+async def generate_image_with_fallback(prompt: str, size: str = "1024x1024"):
+    """使用備用 API Key 生成圖片，如果主要 Key 遇到速率限制"""
+    try:
+        # 首先嘗試使用主要 API Key
+        if OPENAI_API_KEY:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            response = await asyncio.to_thread(
+                client.images.generate,
+                model="dall-e-3",
+                prompt=prompt,
+                n=1,
+                size=size,
+            )
+            return response, "primary"
+    except Exception as e:
+        error_msg = str(e).lower()
+        # 檢查是否為速率限制錯誤
+        if any(keyword in error_msg for keyword in ["rate limit", "too many requests", "quota exceeded", "rate_limit"]):
+            # 如果主要 Key 遇到速率限制，嘗試使用備用 Key
+            if OPENAI_API_KEY2:
+                try:
+                    client = OpenAI(api_key=OPENAI_API_KEY2)
+                    response = await asyncio.to_thread(
+                        client.images.generate,
+                        model="dall-e-3",
+                        prompt=prompt,
+                        n=1,
+                        size=size,
+                    )
+                    return response, "fallback"
+                except Exception as fallback_error:
+                    raise Exception(f"備用 API Key 也失敗: {str(fallback_error)}")
+            else:
+                raise Exception("主要 API Key 遇到速率限制，但沒有可用的備用 Key")
+        else:
+            # 如果不是速率限制錯誤，直接拋出
+            raise e
+    
+    # 如果沒有主要 Key，直接使用備用 Key
+    if OPENAI_API_KEY2:
+        client = OpenAI(api_key=OPENAI_API_KEY2)
+        response = await asyncio.to_thread(
+            client.images.generate,
+            model="dall-e-3",
+            prompt=prompt,
+            n=1,
+            size=size,
+        )
+        return response, "fallback"
+    
+    raise ValueError("沒有可用的 OpenAI API Key")
 
 
 class GenerateRecipeTextRequest(BaseModel):
@@ -29,7 +98,7 @@ class GenerateRecipeImageResponse(BaseModel):
     image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
     prompt: str = Field(..., example="大便")
     enhanced_prompt: str = Field(..., example="Beautiful, appetizing food photography: 大便. High quality, professional food image, safe for all audiences, no inappropriate content.")
-    model_used: str = Field(..., example="dall-e-2")
+    model_used: str = Field(..., example="dall-e-3")
     image_size: str = Field(..., example="1024x1024")
     generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
     generation_date: str = Field(..., example="2024-01-15")
@@ -49,7 +118,7 @@ class GenerateCustomImageRequest(BaseModel):
 class GenerateCustomImageResponse(BaseModel):
     image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
     prompt: str = Field(..., example="李久恩穿著紅色褲褲，手拿十字架，冷傲退基佬，寫實畫風，高清")
-    model_used: str = Field(..., example="dall-e-2")
+    model_used: str = Field(..., example="dall-e-3")
     image_size: str = Field(..., example="1024x1024")
     generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
     generation_date: str = Field(..., example="2024-01-15")
@@ -103,17 +172,12 @@ async def generate_recipe_image(
     request: GenerateRecipeImageRequest,
     http_request: Request,
     username: str = Depends(verify_token),
-    client: OpenAI = Depends(lambda: OpenAI(api_key=__import__('os').getenv('OPENAI_API_KEY'))),
 ):
     try:
         enhanced_prompt = f"美味色澤鮮豔的美食圖片: {request.prompt}. 高品質美食圖片，只能出現食物"
-        response = await asyncio.to_thread(
-            client.images.generate,
-            model="dall-e-2",
-            prompt=enhanced_prompt,
-            n=1,
-            size="1024x1024",
-        )
+        
+        # 使用備用邏輯生成圖片
+        response, key_used = await generate_image_with_fallback(enhanced_prompt, "1024x1024")
 
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
@@ -129,7 +193,7 @@ async def generate_recipe_image(
             image_url=local_image_url,
             prompt=request.prompt,
             enhanced_prompt=enhanced_prompt,
-            model_used="dall-e-2",
+            model_used="dall-e-3",
             image_size="1024x1024",
             generation_time=generation_time.isoformat(),
             generation_date=generation_time.strftime("%Y-%m-%d"),
@@ -157,16 +221,11 @@ async def generate_custom_image(
     request: GenerateCustomImageRequest,
     http_request: Request,
     username: str = Depends(verify_token),
-    client: OpenAI = Depends(lambda: OpenAI(api_key=__import__('os').getenv('OPENAI_API_KEY'))),
 ):
     try:
-        response = await asyncio.to_thread(
-            client.images.generate,
-            model="dall-e-2",
-            prompt=request.prompt,
-            n=1,
-            size="1024x1024",
-        )
+        # 使用備用邏輯生成圖片
+        response, key_used = await generate_image_with_fallback(request.prompt, "1024x1024")
+        
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
         else:
@@ -180,7 +239,7 @@ async def generate_custom_image(
         return GenerateCustomImageResponse(
             image_url=local_image_url,
             prompt=request.prompt,
-            model_used="dall-e-2",
+            model_used="dall-e-3",
             image_size="1024x1024",
             generation_time=generation_time.isoformat(),
             generation_date=generation_time.strftime("%Y-%m-%d"),

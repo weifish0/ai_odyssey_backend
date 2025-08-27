@@ -13,6 +13,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "300"
 NCHC_API_BASE_URL = os.getenv("NCHC_API_BASE_URL", "https://portal.genai.nchc.org.tw/api/v1")
 NCHC_API_KEY = os.getenv("NCHC_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY2 = os.getenv("OPENAI_API_KEY2")  # 備用 API Key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 AI_ENGLISH_WRITING_TEACHER_KEY = os.getenv("AI_ENGLISH_WRITING_TEACHER")
 
