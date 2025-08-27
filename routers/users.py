@@ -29,6 +29,15 @@ async def list_users_scores(current_user: str = Depends(verify_token)):
         "data": users,
     }
 
+@router.get("/public/scores")
+async def get_public_scores():
+    """公開列出所有使用者的分數（無需登入）"""
+    users = db_manager.get_all_users_with_scores()
+    return {
+        "status": "success",
+        "data": users,
+    }
+
 @router.get("/{username}/statistics")
 async def get_user_statistics(username: str, current_user: str = Depends(verify_token)):
     if username != current_user:

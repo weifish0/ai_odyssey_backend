@@ -29,7 +29,7 @@ class GenerateRecipeImageResponse(BaseModel):
     image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
     prompt: str = Field(..., example="大便")
     enhanced_prompt: str = Field(..., example="Beautiful, appetizing food photography: 大便. High quality, professional food image, safe for all audiences, no inappropriate content.")
-    model_used: str = Field(..., example="dall-e-3")
+    model_used: str = Field(..., example="dall-e-2")
     image_size: str = Field(..., example="1024x1024")
     generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
     generation_date: str = Field(..., example="2024-01-15")
@@ -49,7 +49,7 @@ class GenerateCustomImageRequest(BaseModel):
 class GenerateCustomImageResponse(BaseModel):
     image_url: str = Field(..., example="https://ai-odyssey-backend-rbzz.onrender.com/static/images/d1b094d315f4.png")
     prompt: str = Field(..., example="李久恩穿著紅色褲褲，手拿十字架，冷傲退基佬，寫實畫風，高清")
-    model_used: str = Field(..., example="dall-e-3")
+    model_used: str = Field(..., example="dall-e-2")
     image_size: str = Field(..., example="1024x1024")
     generation_time: str = Field(..., example="2024-01-15T10:30:45.123456")
     generation_date: str = Field(..., example="2024-01-15")
@@ -106,10 +106,10 @@ async def generate_recipe_image(
     client: OpenAI = Depends(lambda: OpenAI(api_key=__import__('os').getenv('OPENAI_API_KEY'))),
 ):
     try:
-        enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality food image."
+        enhanced_prompt = f"美味色澤鮮豔的美食圖片: {request.prompt}. 高品質美食圖片，只能出現食物"
         response = await asyncio.to_thread(
             client.images.generate,
-            model="dall-e-3",
+            model="dall-e-2",
             prompt=enhanced_prompt,
             n=1,
             size="1024x1024",
@@ -129,7 +129,7 @@ async def generate_recipe_image(
             image_url=local_image_url,
             prompt=request.prompt,
             enhanced_prompt=enhanced_prompt,
-            model_used="dall-e-3",
+            model_used="dall-e-2",
             image_size="1024x1024",
             generation_time=generation_time.isoformat(),
             generation_date=generation_time.strftime("%Y-%m-%d"),
@@ -162,7 +162,7 @@ async def generate_custom_image(
     try:
         response = await asyncio.to_thread(
             client.images.generate,
-            model="dall-e-3",
+            model="dall-e-2",
             prompt=request.prompt,
             n=1,
             size="1024x1024",
@@ -180,7 +180,7 @@ async def generate_custom_image(
         return GenerateCustomImageResponse(
             image_url=local_image_url,
             prompt=request.prompt,
-            model_used="dall-e-3",
+            model_used="dall-e-2",
             image_size="1024x1024",
             generation_time=generation_time.isoformat(),
             generation_date=generation_time.strftime("%Y-%m-%d"),

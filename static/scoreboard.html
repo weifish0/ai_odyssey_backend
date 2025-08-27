@@ -9,7 +9,6 @@
     h1 { margin-bottom: 12px; }
     .controls { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .sorts { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-    input[type="text"], input[type="password"] { padding: 8px; }
     button { padding: 8px 12px; cursor: pointer; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
@@ -18,39 +17,13 @@
     .ok { color: #090; margin: 8px 0; }
   </style>
   <script>
-    let token = null;
     let currentSortKey = 'score_total';
     let cachedUsers = [];
-
-    async function login() {
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value.trim();
-      const err = document.getElementById('err');
-      err.textContent = '';
-      try {
-        const resp = await fetch('/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || '登入失敗');
-        token = data.access_token;
-        err.textContent = '登入成功';
-        err.className = 'ok';
-        await loadScores();
-      } catch (e) {
-        err.textContent = e.message;
-        err.className = 'error';
-      }
-    }
 
     async function loadScores() {
       const err = document.getElementById('err');
       try {
-        const resp = await fetch('/users', {
-          headers: token ? { 'Authorization': 'Bearer ' + token } : {}
-        });
+        const resp = await fetch('/users/public/scores');
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || '讀取分數失敗');
         cachedUsers = data.data || [];
@@ -103,9 +76,6 @@
 <body onload="startAutoRefresh()">
   <h1>使用者分數看板</h1>
   <div class="controls">
-    <input id="username" type="text" placeholder="帳號" />
-    <input id="password" type="password" placeholder="密碼" />
-    <button onclick="login()">登入並載入</button>
     <button onclick="loadScores()">立即刷新</button>
     <div class="sorts">
       <span>排序：</span>

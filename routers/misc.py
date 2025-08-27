@@ -31,7 +31,7 @@ async def list_models():
             "Llama-4-Maverick-17B-128E-Instruct-FP8",
             "gpt-oss-120b",
             "gemini-2.5-flash",
-            "dall-e-3",
+            "dall-e-2",
             "gemini-embedding-001",
         ]
     }
