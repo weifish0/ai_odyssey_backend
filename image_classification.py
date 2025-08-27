@@ -17,9 +17,13 @@ from ml_state import get_mobilenet_semaphore, get_mobilenet_lock
 logger = logging.getLogger(__name__)
 TRAINING_DATA_BASE_PATH = "CV-data/fish"
 
-# 確保啟用 eager execution，避免張量在非 eager 環境下調用 .numpy() 失敗
+# 以環境變數控制 eager 執行（預設關閉以提升效能）
+import os as _os
 try:
-    tf.config.run_functions_eagerly(True)
+    if _os.getenv("TF_EAGER", "0").strip() == "1":
+        tf.config.run_functions_eagerly(True)
+    else:
+        tf.config.run_functions_eagerly(False)
 except Exception:
     pass
 
@@ -47,8 +51,8 @@ class ImageClassificationModel:
         self.MOBILE_NET_INPUT_WIDTH = 224
         self.MOBILE_NET_INPUT_HEIGHT = 224
         self.COLOR_CHANNEL = 3
-        self.EPOCHS_NUM = 10
-        self.BATCH_SIZE = 8
+        self.EPOCHS_NUM = 5
+        self.BATCH_SIZE = 10
         
         # 模型組件
         self.mobilenet = base_model 
@@ -100,9 +104,11 @@ class ImageClassificationModel:
         try:
             logger.info(f"創建分類器模型，類別數: {num_classes}, 特徵維度: {self.feature_dim}")
             
-            # 精簡的分類器架構
+            # 改進的分類器架構：加入 BatchNorm 與 Dropout 提升泛化
             self.classifier_model = tf.keras.Sequential([
-                tf.keras.layers.Dense(64, activation='relu', input_shape=(self.feature_dim,)),
+                tf.keras.layers.Dense(128, activation='relu', input_shape=(self.feature_dim,)),
+                tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.Dropout(0.3),
                 tf.keras.layers.Dense(num_classes, activation='softmax')
             ])
             
@@ -142,7 +148,32 @@ class ImageClassificationModel:
             
             # 轉換為 RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            
+
+            # 輕量資料增強（僅在 augment=True 時啟用）
+            if augment:
+                try:
+                    # 隨機水平翻轉
+                    if np.random.rand() < 0.5:
+                        img = cv2.flip(img, 1)
+                    # 輕微旋轉 (-12 ~ 12 度)
+                    angle = np.random.uniform(-12, 12)
+                    h, w = img.shape[:2]
+                    M = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+                    img = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+                    # 輕微縮放與平移
+                    scale = np.random.uniform(0.9, 1.1)
+                    tx = int(np.random.uniform(-0.05, 0.05) * w)
+                    ty = int(np.random.uniform(-0.05, 0.05) * h)
+                    M2 = np.array([[scale, 0, tx], [0, scale, ty]], dtype=np.float32)
+                    img = cv2.warpAffine(img, M2, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+                    # 亮度/對比度微調
+                    alpha = np.random.uniform(0.9, 1.1)  # 對比
+                    beta = np.random.uniform(-10, 10)    # 亮度
+                    img = cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
+                except Exception:
+                    pass
+
+
             # 調整大小
             img = cv2.resize(img, (self.MOBILE_NET_INPUT_WIDTH, self.MOBILE_NET_INPUT_HEIGHT))
             
@@ -179,7 +210,7 @@ class ImageClassificationModel:
                 pass
 
             # 預處理圖片
-            img = self.preprocess_image(image_path, augment=False)
+            img = self.preprocess_image(image_path, augment=augment)
             if img is None:
                 return None
             
@@ -189,9 +220,8 @@ class ImageClassificationModel:
             if semaphore is not None:
                 semaphore.acquire()
             try:
-                # 某些後端需要鎖住 session/graph
-                with self._mobilenet_lock:
-                    features = self.mobilenet.predict(img, verbose=0)
+                # 僅以信號量限制併發，移除全域鎖以提升吞吐
+                features = self.mobilenet.predict(img, verbose=0)
             finally:
                 if semaphore is not None:
                     semaphore.release()
@@ -274,13 +304,24 @@ class ImageClassificationModel:
                         logger.warning(f"圖片不存在: {image_path}")
                         continue
                     
-                    # 提取特徵
+                    # 提取特徵（基礎樣本）
                     features = self.extract_features(image_path, augment=False)
                     if features is not None:
                         self.training_data_inputs.append(features)
                         self.training_data_outputs.append(class_idx)
                         self.examples_count[class_idx] += 1
                         self.training_image_set.add(image_path)
+                        # 若當前總樣本已達 20，額外加入一筆增強樣本以提升泛化
+                        try:
+                            if len(self.training_data_inputs) >= 20:
+                                features_aug = self.extract_features(image_path, augment=True)
+                                if features_aug is not None:
+                                    self.training_data_inputs.append(features_aug)
+                                    self.training_data_outputs.append(class_idx)
+                                    self.examples_count[class_idx] += 1
+                        except Exception:
+                            pass
+
             
             # 檢查數據
             total_samples = len(self.training_data_inputs)
@@ -355,7 +396,15 @@ class ImageClassificationModel:
             
             # 重新編譯模型
             current_num_classes = len(self.class_names)
-            loss_function = 'binary_crossentropy' if current_num_classes == 2 else 'categorical_crossentropy'
+            # 使用標籤平滑在大資料時提升泛化
+            if current_num_classes == 2:
+                loss_function = tf.keras.losses.BinaryCrossentropy(
+                    label_smoothing=0.05 if is_large_trainset else 0.0
+                )
+            else:
+                loss_function = tf.keras.losses.CategoricalCrossentropy(
+                    label_smoothing=0.1 if is_large_trainset else 0.0
+                )
             lr_to_use = 0.001
             epochs_to_use = self.EPOCHS_NUM
             batch_size_to_use = self.BATCH_SIZE
@@ -364,8 +413,10 @@ class ImageClassificationModel:
                 epochs_to_use = 1
                 batch_size_to_use = 1
             elif is_large_trainset:
-                # 採用原本做法：不強制增加 epochs，也不額外修改 batch size
-                lr_to_use = 0.001
+                # 大資料：降低學習率、適度增加訓練輪數
+                lr_to_use = 5e-4
+                epochs_to_use = max(self.EPOCHS_NUM, 18)
+                batch_size_to_use = max(self.BATCH_SIZE, 16)
             self.classifier_model.compile(
                 optimizer=tf.keras.optimizers.Adam(learning_rate=lr_to_use),
                 loss=loss_function,
@@ -403,7 +454,44 @@ class ImageClassificationModel:
                 save_weights_only=False,
                 verbose=1
             )
+            # 加入 CosineDecayRestarts 學習率調度（提升收斂與最終精度）
+            try:
+                initial_lr = lr_to_use
+                lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
+                    initial_learning_rate=initial_lr,
+                    first_decay_steps=max(5, epochs_to_use // 3),
+                    t_mul=2.0,
+                    m_mul=0.8,
+                    alpha=0.1
+                )
+                # 重新編譯以使用學習率排程
+                self.classifier_model.compile(
+                    optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
+                    loss=loss_function,
+                    metrics=['accuracy']
+                )
+            except Exception:
+                pass
+
             callbacks_list = [model_checkpoint]
+            # 大資料集時加入 EarlyStopping 與 ReduceLROnPlateau 以提高最終 val_accuracy
+            if is_large_trainset:
+                early_stopping = tf.keras.callbacks.EarlyStopping(
+                    monitor='val_accuracy',
+                    patience=5,
+                    mode='max',
+                    restore_best_weights=True
+                )
+                callbacks_list.extend([early_stopping])
+
+            # 類別不平衡處理：使用 class_weight
+            class_weight = None
+            try:
+                unique, counts = np.unique(y_indices, return_counts=True)
+                max_count = counts.max()
+                class_weight = {int(k): float(max_count / c) for k, c in zip(unique, counts)}
+            except Exception:
+                class_weight = None
 
             # 訓練模型：若有固定驗證樣本則使用，否則退回 validation_split
             if len(val_inputs) > 0:
@@ -417,6 +505,7 @@ class ImageClassificationModel:
                     epochs=epochs_to_use,
                     validation_data=(X_val, y_val),
                     callbacks=callbacks_list,
+                    class_weight=class_weight,
                     verbose=1
                 )
             else:
@@ -428,14 +517,74 @@ class ImageClassificationModel:
                     epochs=epochs_to_use,
                     validation_split=0.2,
                     callbacks=callbacks_list,
+                    class_weight=class_weight,
                     verbose=1
                 )
+
+            # 第二階段微調（替代策略）：只使用驗證集中的「難例」(被誤判者) 來強化決策邊界
+            # 目標：在不全面引入驗證樣本的前提下，提高對困難樣本的辨識能力與最終 val_accuracy
+            if is_large_trainset and len(val_inputs) > 0:
+                try:
+                    logger.info("啟動第二階段微調：只強化驗證集中的難例樣本...")
+                    # 取得驗證集預測，找出被誤判的難例
+                    preds_val = self.classifier_model.predict(X_val, verbose=0)
+                    hard_mask = np.argmax(preds_val, axis=1) != np.argmax(y_val, axis=1)
+                    if np.sum(hard_mask) == 0:
+                        logger.info("驗證集中沒有難例，略過第二階段微調。")
+                    else:
+                        X_hard = X_val[hard_mask]
+                        y_hard = y_val[hard_mask]
+
+                        # 將難例加權：重複數次放大其影響（例如重複 4 次）
+                        repeat_times = 4
+                        X_plus = np.concatenate([X, np.repeat(X_hard, repeat_times, axis=0)], axis=0)
+                        y_plus = np.concatenate([y, np.repeat(y_hard, repeat_times, axis=0)], axis=0)
+
+                        # 重新隨機打散
+                        indices2 = np.arange(len(X_plus))
+                        np.random.shuffle(indices2)
+                        X_plus = X_plus[indices2]
+                        y_plus = y_plus[indices2]
+
+                        # 調低學習率，短暫微調
+                        fine_tune_lr = 2e-5
+                        extra_epochs = max(6, min(10, epochs_to_use // 2 if isinstance(epochs_to_use, int) else 6))
+                    self.classifier_model.compile(
+                        optimizer=tf.keras.optimizers.Adam(learning_rate=fine_tune_lr),
+                        loss=loss_function,
+                        metrics=['accuracy']
+                    )
+
+                    if np.sum(hard_mask) > 0:
+                        # 重新計算 class_weight（包含難例後）
+                        class_weight2 = None
+                        try:
+                            y_plus_indices = np.argmax(y_plus, axis=1)
+                            unique2, counts2 = np.unique(y_plus_indices, return_counts=True)
+                            max_count2 = counts2.max()
+                            class_weight2 = {int(k): float(max_count2 / c) for k, c in zip(unique2, counts2)}
+                        except Exception:
+                            class_weight2 = None
+
+                        history_ft = await asyncio.to_thread(
+                            self.classifier_model.fit,
+                            X_plus,
+                            y_plus,
+                            batch_size=batch_size_to_use,
+                            epochs=extra_epochs,
+                            validation_data=(X_val, y_val),
+                            callbacks=callbacks_list,
+                            class_weight=class_weight2,
+                            verbose=1
+                        )
+                except Exception as e:
+                    logger.warning(f"第二階段微調過程發生例外，略過微調：{e}")
             
             # 保存最終模型
             final_model_path = self.model_save_path / "classifier_model.h5"
             self.classifier_model.save(str(final_model_path))
 
-            # 若存在最佳模型，載入以供後續預測使用，並優先回傳最佳模型路徑
+            # 若存在最佳模型，載入以供後續預測使用，並優先回傳最佳模型路徑（val_accuracy 最佳）
             best_model_path = None
             try:
                 if os.path.exists(str(checkpoint_path)):

@@ -10,6 +10,7 @@ from core.utils import download_and_save_image
 
 import httpx
 from openai import OpenAI
+import asyncio
 
 
 class GenerateRecipeTextRequest(BaseModel):
@@ -106,7 +107,13 @@ async def generate_recipe_image(
 ):
     try:
         enhanced_prompt = f"Beautiful, appetizing food photography: {request.prompt}. High quality food image."
-        response = client.images.generate(model="dall-e-3", prompt=enhanced_prompt, n=1, size="1024x1024")
+        response = await asyncio.to_thread(
+            client.images.generate,
+            model="dall-e-3",
+            prompt=enhanced_prompt,
+            n=1,
+            size="1024x1024",
+        )
 
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
@@ -153,7 +160,13 @@ async def generate_custom_image(
     client: OpenAI = Depends(lambda: OpenAI(api_key=__import__('os').getenv('OPENAI_API_KEY'))),
 ):
     try:
-        response = client.images.generate(model="dall-e-3", prompt=request.prompt, n=1, size="1024x1024")
+        response = await asyncio.to_thread(
+            client.images.generate,
+            model="dall-e-3",
+            prompt=request.prompt,
+            n=1,
+            size="1024x1024",
+        )
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
         else:

@@ -8,6 +8,7 @@ from datetime import datetime
 from core.deps import verify_token
 from core.utils import STATIC_IMAGES_DIR
 from google import genai
+import asyncio
 
 
 class FoodImageAnalysisRequest(BaseModel):
@@ -55,7 +56,11 @@ ANALYSIS:
 請確保回覆格式完全按照上述模板，SCORE 必須是 0-100 的整數分數。"""
 
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=[types.Part.from_bytes(data=image_bytes, mime_type='image/png'), chef_prompt])
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=[types.Part.from_bytes(data=image_bytes, mime_type='image/png'), chef_prompt],
+        )
         response_text = response.text
 
         score = 50

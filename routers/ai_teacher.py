@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from google import genai
+import asyncio
 
 
 class ImageData(BaseModel):
@@ -68,7 +69,11 @@ async def ocr_topic(request: OCRRequest):
             image_bytes = base64.b64decode(image_data.data)
         except Exception as e:
             return AIWritingTeacherResponse(success=False, data=None, error={"code": "INVALID_IMAGE_FORMAT", "message": "圖片格式錯誤", "details": f"base64 解碼失敗: {str(e)}"})
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=[types.Part.from_bytes(data=image_bytes, mime_type=image_data.mimeType), request.system_prompt])
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=[types.Part.from_bytes(data=image_bytes, mime_type=image_data.mimeType), request.system_prompt],
+        )
         response_text = response.text
         if "```json" in response_text:
             json_start = response_text.find("```json") + 7
@@ -105,7 +110,11 @@ async def ocr_essay(request: OCRRequest):
                 image_bytes = base64.b64decode(image_data.data)
             except Exception as e:
                 return AIWritingTeacherResponse(success=False, data=None, error={"code": "INVALID_IMAGE_FORMAT", "message": "圖片格式錯誤", "details": f"base64 解碼失敗: {str(e)}"})
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=[types.Part.from_bytes(data=image_bytes, mime_type=image_data.mimeType), request.system_prompt])
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=[types.Part.from_bytes(data=image_bytes, mime_type=image_data.mimeType), request.system_prompt],
+            )
             all_texts.append(response.text)
         combined_text = " ".join(all_texts)
         return AIWritingTeacherResponse(success=True, data={"recognized_text": combined_text}, error=None)

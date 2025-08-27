@@ -78,6 +78,18 @@ async def lifespan(app: FastAPI):
         logger.info("✅ MobileNet 模型初始化成功")
     else:
         logger.error("❌ MobileNet 模型初始化失敗")
+
+    # 預載 RAG 向量資料庫到 app.state，避免每請求重覆載入
+    try:
+        app.state.vector_db_1 = load_vector_database("vector_database_1.pkl")
+    except Exception as e:
+        app.state.vector_db_1 = None
+        logger.warning(f"載入 vector_database_1.pkl 失敗: {e}")
+    try:
+        app.state.vector_db_2 = load_vector_database("vector_database_2.pkl")
+    except Exception as e:
+        app.state.vector_db_2 = None
+        logger.warning(f"載入 vector_database_2.pkl 失敗: {e}")
     
     # 啟動定期清理任務
     import asyncio
